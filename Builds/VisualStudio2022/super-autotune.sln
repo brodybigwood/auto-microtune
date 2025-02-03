@@ -1,0 +1,46 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 11.00
+# Visual Studio Version 17
+
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "super-autotune - Standalone Plugin", "super-autotune_StandalonePlugin.vcxproj", "{9F609A6B-3867-AAC0-0F3C-50690D393DFF}"
+	ProjectSection(ProjectDependencies) = postProject
+		{ED118E65-07BF-A590-4471-BC20BE012AE3} = {ED118E65-07BF-A590-4471-BC20BE012AE3}
+	EndProjectSection
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "super-autotune - VST3", "super-autotune_VST3.vcxproj", "{11C93823-CB63-9967-51C4-A7CC5C316E5B}"
+	ProjectSection(ProjectDependencies) = postProject
+		{ED118E65-07BF-A590-4471-BC20BE012AE3} = {ED118E65-07BF-A590-4471-BC20BE012AE3}
+		{7E692CEE-276C-88CD-2CA5-2D51C17CF455} = {7E692CEE-276C-88CD-2CA5-2D51C17CF455}
+	EndProjectSection
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "super-autotune - Shared Code", "super-autotune_SharedCode.vcxproj", "{ED118E65-07BF-A590-4471-BC20BE012AE3}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "super-autotune - VST3 Manifest Helper", "super-autotune_VST3ManifestHelper.vcxproj", "{7E692CEE-276C-88CD-2CA5-2D51C17CF455}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{11C93823-CB63-9967-51C4-A7CC5C316E5B}.Debug|x64.ActiveCfg = Debug|x64
+		{11C93823-CB63-9967-51C4-A7CC5C316E5B}.Debug|x64.Build.0 = Debug|x64
+		{11C93823-CB63-9967-51C4-A7CC5C316E5B}.Release|x64.ActiveCfg = Release|x64
+		{11C93823-CB63-9967-51C4-A7CC5C316E5B}.Release|x64.Build.0 = Release|x64
+		{9F609A6B-3867-AAC0-0F3C-50690D393DFF}.Debug|x64.ActiveCfg = Debug|x64
+		{9F609A6B-3867-AAC0-0F3C-50690D393DFF}.Debug|x64.Build.0 = Debug|x64
+		{9F609A6B-3867-AAC0-0F3C-50690D393DFF}.Release|x64.ActiveCfg = Release|x64
+		{9F609A6B-3867-AAC0-0F3C-50690D393DFF}.Release|x64.Build.0 = Release|x64
+		{ED118E65-07BF-A590-4471-BC20BE012AE3}.Debug|x64.ActiveCfg = Debug|x64
+		{ED118E65-07BF-A590-4471-BC20BE012AE3}.Debug|x64.Build.0 = Debug|x64
+		{ED118E65-07BF-A590-4471-BC20BE012AE3}.Release|x64.ActiveCfg = Release|x64
+		{ED118E65-07BF-A590-4471-BC20BE012AE3}.Release|x64.Build.0 = Release|x64
+		{7E692CEE-276C-88CD-2CA5-2D51C17CF455}.Debug|x64.ActiveCfg = Debug|x64
+		{7E692CEE-276C-88CD-2CA5-2D51C17CF455}.Debug|x64.Build.0 = Debug|x64
+		{7E692CEE-276C-88CD-2CA5-2D51C17CF455}.Release|x64.ActiveCfg = Release|x64
+		{7E692CEE-276C-88CD-2CA5-2D51C17CF455}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal
