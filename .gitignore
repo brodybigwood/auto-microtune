@@ -1,0 +1,14 @@
+
+Builds/
+*.sln
+*.vcxproj*
+*.xcodeproj
+*.DS_Store
+
+
+JuceLibraryCode/
+
+# vscode
+*.user
+.idea/
+.vscode/
