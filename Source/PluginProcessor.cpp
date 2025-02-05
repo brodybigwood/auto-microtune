@@ -8,6 +8,9 @@
 
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include <juce_dsp/juce_dsp.h>
+#include <cmath>
+
 
 //==============================================================================
 SuperautotuneAudioProcessor::SuperautotuneAudioProcessor()
@@ -134,6 +137,8 @@ void SuperautotuneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     juce::ScopedNoDenormals noDenormals;
     auto totalNumInputChannels  = getTotalNumInputChannels();
     auto totalNumOutputChannels = getTotalNumOutputChannels();
+    float sampleRate = getSampleRate();
+
 
     // In case we have more outputs than inputs, this code clears any output
     // channels that didn't contain input data, (because these aren't
@@ -144,17 +149,79 @@ void SuperautotuneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
 
+
     // This is the place where you'd normally do the guts of your plugin's
     // audio processing...
     // Make sure to reset the state if your inner loop is processing
     // the samples and the outer loop is handling the channels.
     // Alternatively, you can process the samples with the channels
     // interleaved by keeping the same state.
-    for (int channel = 0; channel < totalNumInputChannels; ++channel)
+    int order = 1 + std::ceil(std::log2(buffer.getNumSamples()));
+    juce::dsp::FFT fft(order);
+    if (buffer.getNumChannels() != 0 && buffer.getNumSamples() != 0)
     {
-        auto* channelData = buffer.getWritePointer (channel);
+        for (int channel = 0; channel < totalNumInputChannels; ++channel)
+        {
 
-        // ..do something to the data...
+
+            auto* channelData = buffer.getWritePointer(channel);
+
+            for (int i = 1; i < buffer.getNumSamples(); ++i) {
+                // A simple low-pass filter (e.g., simple moving average or basic FIR)
+                channelData[i] = 0.9 * channelData[i - 1] + 0.1 * channelData[i];
+            }
+
+            if (channelData == nullptr) {
+                DBG("Error: channelData pointer is null!");
+                return;
+            }
+            else {
+                
+                std::vector<float> fftData;
+                
+                fftData.resize(2*fft.getSize(), 0.0f);
+                
+                std::memcpy(fftData.data(), channelData, buffer.getNumSamples() * sizeof(float));
+ 
+               
+                
+                // transform to frequency domain
+                fft.performRealOnlyForwardTransform(fftData.data());
+                
+                float maxMagnitude = 0.0f;
+                int maxBin = -1;
+                
+
+                for (int i = 0; i < fftData.size(); ++i)
+                {
+                    if (fftData[i] > maxMagnitude)
+                    {
+                        maxMagnitude = fftData[i];
+                        maxBin = i;
+                    }
+                }
+
+                float nyquistFrequency = sampleRate / 2.0f;
+                float cutoffFrequency = nyquistFrequency - 1000;
+
+                float frequency = (maxBin * sampleRate) / fft.getSize();
+                /**/
+                //float frequency = 500;
+                float bufferLengthSeconds = buffer.getNumSamples() / sampleRate;
+
+                float freqInBuffer = frequency * bufferLengthSeconds;
+                if (frequency > 20) 
+                {
+                    for (int i = 0; i < buffer.getNumSamples(); ++i)
+                    {
+                        //create sine wave of strongest frequency
+                        float sample = 3.14159 * frequency * i / sampleRate;
+                        channelData[i] = sin(sample);
+                    }
+                }
+            }
+            
+        }
     }
 }
 
