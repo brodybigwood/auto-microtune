@@ -163,32 +163,47 @@ float lastFreq;
 
 class Scale {
     public:
-    Scale(const std::vector<float>& values, float freq) : scale(values), baseFrequency(freq) {}
-
-    void displayScale() const {
-        for (float value : scale) {
-            std::cout << value << " ";
-        }
-        std::cout << std::endl;
-    }
+    //first arg: an array of frequency ratios for the scale
+    //2nd arg: home frequency of the scale
+    Scale(const std::vector<float>& values, float freq) : scale(values), baseFrequency(reduceF(freq)) {}
 
     float findNote(float inputFreq)
     {
-        float minDifference = 1200;
+        if(inputFreq == 0)
+        {
+            return 0.0f;
+        }
+        float minDifference = 120000000000;
         int scaleIndex;
+        int power;
+        float relativeFrequency;
+        float octave;
         for (size_t i = 0; i < scale.size(); ++i)
         {
-            float difference = std::abs(1200*log2(inputFreq/(baseFrequency*scale[i])));
-            if (difference<minDifference)
-            {
-                minDifference = difference;
-                scaleIndex = i;
+            for(int p = 0; p < 10; ++p){
+                octave = baseFrequency*std::pow(2, p);
+                float difference = std::abs(1200*log2(inputFreq/(octave*scale[i])));
+                if (difference<minDifference)
+                {
+                    minDifference = difference;
+                    scaleIndex = i;
+                    relativeFrequency = baseFrequency*std::pow(2, p);
+
+                }
             }
         }
-        float outputNote = baseFrequency * scale[scaleIndex];
+        float outputNote = relativeFrequency * scale[scaleIndex];
         return outputNote;
     }
     private:
+        float reduceF(float freq)
+    {
+        while(freq > 30)
+        {
+            freq/=2;
+        }
+        return freq;
+    }
     float baseFrequency;
     std::vector<float> scale;
 };
@@ -267,31 +282,17 @@ void SuperautotuneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
                     }
                 }
 
+                // Calculate frequency and print it
                 float frequency = (maxBin * sampleRate) / fft.getSize();
                 
-                
-                                // Debug: Output the FFT size and maxBin
-                std::cout << "FFT Size: " << fft.getSize() << std::endl;
-                std::cout << "maxBin: " << maxBin << std::endl;
-
-                // Check if maxBin is within a reasonable range
-                if (maxBin < 0 || maxBin >= fft.getSize()/2) {
-                    std::cout << "Warning: maxBin out of range!" << std::endl;
-                }
-
-                // Calculate frequency and print it
-
-                std::cout << "Frequency before checks: " << frequency << " Hz" << std::endl;
-
-                // Ensure the frequency is within the Nyquist limit (sampleRate / 2)
-                if (frequency > sampleRate / 2) 
-                {
-                    std::cout << "Warning: Frequency exceeds Nyquist limit! (" << sampleRate / 2 << " Hz)" << std::endl;
-                }
+                std::cout << "Frequency before scale: " << frequency << " Hz" << std::endl;
 
                 //clear the buffer
                 std::fill(channelData, channelData + buffer.getNumSamples(), 0.0f);
-                //frequency = 500;
+ 
+                //map to scale
+                frequency = _5lim_500hz.findNote(frequency);
+                std::cout << "Frequency after scale: " << frequency << " Hz" << std::endl;
 
                 float phase = lastphase;
                 for (int i = 0; i < buffer.getNumSamples(); ++i)
