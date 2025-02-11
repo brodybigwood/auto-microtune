@@ -264,11 +264,12 @@ void SuperautotuneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
 
                 applyHammingWindow(fftData.data(), std::pow(2, order+1));
  
-               
-                
                 // transform to frequency domain
-                fft.performRealOnlyForwardTransform(fftData.data());
+                fft.performFrequencyOnlyForwardTransform(fftData.data(), true);
                 
+
+
+
                 float maxMagnitude = 0.0f;
                 int maxBin = -1;
                 
@@ -284,7 +285,7 @@ void SuperautotuneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
                 }
 
                 // Calculate frequency and print it
-                float frequency = (maxBin * sampleRate) / fft.getSize();
+                float frequency = 2* (maxBin * sampleRate) / fft.getSize();
                 
                 std::cout << "Frequency before scale: " << frequency << " Hz" << std::endl;
 
