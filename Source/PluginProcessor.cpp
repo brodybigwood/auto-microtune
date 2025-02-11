@@ -287,6 +287,14 @@ void SuperautotuneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
                 
                 std::cout << "Frequency before scale: " << frequency << " Hz" << std::endl;
 
+
+
+
+                //idk why but sometimes frequency is negative on startup
+                if(frequency < 0){
+                    frequency = 0;
+                }
+
                 //clear the buffer
                 std::fill(channelData, channelData + buffer.getNumSamples(), 0.0f);
  
