@@ -236,7 +236,7 @@ void SuperautotuneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     // the samples and the outer loop is handling the channels.
     // Alternatively, you can process the samples with the channels
     // interleaved by keeping the same state.
-    int order = 3+std::ceil(std::log2(buffer.getNumSamples()));
+    int order = 5+std::ceil(std::log2(buffer.getNumSamples()));
     juce::dsp::FFT fft(order);
 
     if (buffer.getNumChannels() != 0 && buffer.getNumSamples() != 0)
