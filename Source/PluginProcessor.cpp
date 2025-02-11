@@ -161,6 +161,10 @@ void applyBlackmanHarrisWindow(float* data, int numSamples)
 float lastphase = 0;
 float lastFreq;
 
+
+
+
+
 void SuperautotuneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
     juce::ScopedNoDenormals noDenormals;
@@ -185,11 +189,12 @@ void SuperautotuneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     // the samples and the outer loop is handling the channels.
     // Alternatively, you can process the samples with the channels
     // interleaved by keeping the same state.
-    int order = std::ceil(std::log2(buffer.getNumSamples()));
+    int order = 3+std::ceil(std::log2(buffer.getNumSamples()));
     juce::dsp::FFT fft(order);
+
     if (buffer.getNumChannels() != 0 && buffer.getNumSamples() != 0)
     {
-        for (int channel = 0; channel < totalNumInputChannels; ++channel)
+        for (int channel = 1; channel < totalNumInputChannels; ++channel)
         {
 
 
@@ -267,6 +272,8 @@ void SuperautotuneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
                 lastphase = phase;
 
                 lastFreq = frequency;
+
+
             }
             
         }
