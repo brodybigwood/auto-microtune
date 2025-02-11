@@ -141,6 +141,26 @@ void applyHammingWindow(float* data, int numSamples)
     }
 }
 
+void applyBlackmanHarrisWindow(float* data, int numSamples)
+{
+    for (int i = 0; i < numSamples; ++i)
+    {
+        // Apply the Blackman-Harris window
+        float a0 = 0.35875f;
+        float a1 = 0.48829f;
+        float a2 = 0.14128f;
+        float a3 = 0.01168f;
+        
+        data[i] *= a0 - a1 * cosf(2.0f * juce::MathConstants<float>::pi * i / (numSamples - 1))
+                      + a2 * cosf(4.0f * juce::MathConstants<float>::pi * i / (numSamples - 1))
+                      - a3 * cosf(6.0f * juce::MathConstants<float>::pi * i / (numSamples - 1));
+    }
+}
+
+
+float lastphase = 0;
+float lastFreq;
+
 void SuperautotuneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
     juce::ScopedNoDenormals noDenormals;
@@ -165,20 +185,16 @@ void SuperautotuneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     // the samples and the outer loop is handling the channels.
     // Alternatively, you can process the samples with the channels
     // interleaved by keeping the same state.
-    int order = 1 + std::ceil(std::log2(buffer.getNumSamples()));
+    int order = std::ceil(std::log2(buffer.getNumSamples()));
     juce::dsp::FFT fft(order);
     if (buffer.getNumChannels() != 0 && buffer.getNumSamples() != 0)
     {
-        for (int channel = 0; channel < totalNumInputChannels; ++channel)
+        for (int channel = 1; channel < totalNumInputChannels; ++channel)
         {
 
 
             auto* channelData = buffer.getWritePointer(channel);
 
-            for (int i = 1; i < buffer.getNumSamples(); ++i) {
-                // A simple low-pass filter (e.g., simple moving average or basic FIR)
-                channelData[i] = 0.9 * channelData[i - 1] + 0.1 * channelData[i];
-            }
 
             if (channelData == nullptr) {
                 DBG("Error: channelData pointer is null!");
@@ -186,13 +202,15 @@ void SuperautotuneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
             }
             else {
 
-                applyHammingWindow(channelData, buffer.getNumSamples());
+                //applyHammingWindow(channelData, buffer.getNumSamples());
                 
                 std::vector<float> fftData;
                 
-                fftData.resize(2*fft.getSize(), 0.0f);
+                fftData.resize(std::pow(2, order+1), 0.0f);
                 
                 std::memcpy(fftData.data(), channelData, buffer.getNumSamples() * sizeof(float));
+
+                applyHammingWindow(fftData.data(), std::pow(2, order+1));
  
                
                 
@@ -213,20 +231,48 @@ void SuperautotuneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
                 }
 
                 float frequency = (maxBin * sampleRate) / fft.getSize();
+                
+                
+                // Debug: Output the FFT size and maxBin
+std::cout << "FFT Size: " << fft.getSize() << std::endl;
+std::cout << "maxBin: " << maxBin << std::endl;
+
+// Check if maxBin is within a reasonable range
+if (maxBin < 0 || maxBin >= fft.getSize()/2) {
+    std::cout << "Warning: maxBin out of range!" << std::endl;
+}
+
+// Calculate frequency and print it
+
+std::cout << "Frequency before checks: " << frequency << " Hz" << std::endl;
+
+// Ensure the frequency is within the Nyquist limit (sampleRate / 2)
+if (frequency > sampleRate / 2) {
+    std::cout << "Warning: Frequency exceeds Nyquist limit! (" << sampleRate / 2 << " Hz)" << std::endl;
+}
+
+
                 /**/
                 //float frequency = 500;
                 float bufferLengthSeconds = buffer.getNumSamples() / sampleRate;
 
                 float freqInBuffer = frequency * bufferLengthSeconds;
-                if (frequency > 20) 
+                if (frequency == lastFreq) 
                 {
+                    float phase = lastphase;
+                }
+                else
+                {
+                    float phase = lastphase;
                     for (int i = 0; i < buffer.getNumSamples(); ++i)
                     {
                         //create sine wave of strongest frequency
-                        float sample = 3.14159 * frequency * i / sampleRate;
-                        channelData[i] = sin(sample);
+                        phase += juce::MathConstants<float>::pi * frequency / sampleRate;
+                        channelData[i] = sin(phase);
                     }
+                    lastphase = phase;
                 }
+                lastFreq = frequency;
             }
             
         }
