@@ -161,8 +161,40 @@ void applyBlackmanHarrisWindow(float* data, int numSamples)
 float lastphase = 0;
 float lastFreq;
 
+class Scale {
+    public:
+    Scale(const std::vector<float>& values, float freq) : scale(values), baseFrequency(freq) {}
 
+    void displayScale() const {
+        for (float value : scale) {
+            std::cout << value << " ";
+        }
+        std::cout << std::endl;
+    }
 
+    float findNote(float inputFreq)
+    {
+        float minDifference = 1200;
+        int scaleIndex;
+        for (size_t i = 0; i < scale.size(); ++i)
+        {
+            float difference = std::abs(1200*log2(inputFreq/(baseFrequency*scale[i])));
+            if (difference<minDifference)
+            {
+                minDifference = difference;
+                scaleIndex = i;
+            }
+        }
+        float outputNote = baseFrequency * scale[scaleIndex];
+        return outputNote;
+    }
+    private:
+    float baseFrequency;
+    std::vector<float> scale;
+};
+
+std::vector<float> _5lim = {9.0f/8.0f, 5.0f/4.0f, 4.0f/3.0f, 3.0f/2.0f, 5.0f/3.0f, 15.0f/8.0f, 2.0f/1.0f};
+Scale _5lim_500hz(_5lim, 500);  
 
 
 void SuperautotuneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
