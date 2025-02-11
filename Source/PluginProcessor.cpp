@@ -251,27 +251,19 @@ if (frequency > sampleRate / 2) {
     std::cout << "Warning: Frequency exceeds Nyquist limit! (" << sampleRate / 2 << " Hz)" << std::endl;
 }
 
+                //clear the buffer
+                std::fill(channelData, channelData + buffer.getNumSamples(), 0.0f);
+                //frequency = 500;
 
-                /**/
-                //float frequency = 500;
-                float bufferLengthSeconds = buffer.getNumSamples() / sampleRate;
+                float phase = lastphase;
+                for (int i = 0; i < buffer.getNumSamples(); ++i)
+                {
+                    //create sine wave of strongest frequency
+                    phase += 2.0f * juce::MathConstants<float>::pi * frequency / sampleRate;
+                    channelData[i] = sin(phase);
+                }
+                lastphase = phase;
 
-                float freqInBuffer = frequency * bufferLengthSeconds;
-                if (frequency == lastFreq) 
-                {
-                    float phase = lastphase;
-                }
-                else
-                {
-                    float phase = lastphase;
-                    for (int i = 0; i < buffer.getNumSamples(); ++i)
-                    {
-                        //create sine wave of strongest frequency
-                        phase += juce::MathConstants<float>::pi * frequency / sampleRate;
-                        channelData[i] = sin(phase);
-                    }
-                    lastphase = phase;
-                }
                 lastFreq = frequency;
             }
             
