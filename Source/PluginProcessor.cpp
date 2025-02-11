@@ -272,8 +272,9 @@ void SuperautotuneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
                 float maxMagnitude = 0.0f;
                 int maxBin = -1;
                 
-
-                for (int i = 0; i < fftData.size(); ++i)
+                float maxFreq = 15000;
+                int maxBinIndex = static_cast<int>((maxFreq / sampleRate) * fftData.size());
+                for (int i = 0; i < maxBinIndex; ++i)
                 {
                     if (fftData[i] > maxMagnitude)
                     {
