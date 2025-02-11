@@ -132,6 +132,15 @@ bool SuperautotuneAudioProcessor::isBusesLayoutSupported (const BusesLayout& lay
 }
 #endif
 
+void applyHammingWindow(float* data, int numSamples)
+{
+    for (int i = 0; i < numSamples; ++i)
+    {
+        // Apply the Hamming window
+        data[i] *= 0.54f - 0.46f * cosf(2.0f * juce::MathConstants<float>::pi * i / (numSamples - 1));
+    }
+}
+
 void SuperautotuneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
     juce::ScopedNoDenormals noDenormals;
@@ -176,6 +185,8 @@ void SuperautotuneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
                 return;
             }
             else {
+
+                applyHammingWindow(channelData, buffer.getNumSamples());
                 
                 std::vector<float> fftData;
                 
@@ -200,9 +211,6 @@ void SuperautotuneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
                         maxBin = i;
                     }
                 }
-
-                float nyquistFrequency = sampleRate / 2.0f;
-                float cutoffFrequency = nyquistFrequency - 1000;
 
                 float frequency = (maxBin * sampleRate) / fft.getSize();
                 /**/
