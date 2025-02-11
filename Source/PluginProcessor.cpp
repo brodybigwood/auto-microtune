@@ -189,7 +189,7 @@ void SuperautotuneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     juce::dsp::FFT fft(order);
     if (buffer.getNumChannels() != 0 && buffer.getNumSamples() != 0)
     {
-        for (int channel = 1; channel < totalNumInputChannels; ++channel)
+        for (int channel = 0; channel < totalNumInputChannels; ++channel)
         {
 
 
@@ -233,23 +233,24 @@ void SuperautotuneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
                 float frequency = (maxBin * sampleRate) / fft.getSize();
                 
                 
-                // Debug: Output the FFT size and maxBin
-std::cout << "FFT Size: " << fft.getSize() << std::endl;
-std::cout << "maxBin: " << maxBin << std::endl;
+                                // Debug: Output the FFT size and maxBin
+                std::cout << "FFT Size: " << fft.getSize() << std::endl;
+                std::cout << "maxBin: " << maxBin << std::endl;
 
-// Check if maxBin is within a reasonable range
-if (maxBin < 0 || maxBin >= fft.getSize()/2) {
-    std::cout << "Warning: maxBin out of range!" << std::endl;
-}
+                // Check if maxBin is within a reasonable range
+                if (maxBin < 0 || maxBin >= fft.getSize()/2) {
+                    std::cout << "Warning: maxBin out of range!" << std::endl;
+                }
 
-// Calculate frequency and print it
+                // Calculate frequency and print it
 
-std::cout << "Frequency before checks: " << frequency << " Hz" << std::endl;
+                std::cout << "Frequency before checks: " << frequency << " Hz" << std::endl;
 
-// Ensure the frequency is within the Nyquist limit (sampleRate / 2)
-if (frequency > sampleRate / 2) {
-    std::cout << "Warning: Frequency exceeds Nyquist limit! (" << sampleRate / 2 << " Hz)" << std::endl;
-}
+                // Ensure the frequency is within the Nyquist limit (sampleRate / 2)
+                if (frequency > sampleRate / 2) 
+                {
+                    std::cout << "Warning: Frequency exceeds Nyquist limit! (" << sampleRate / 2 << " Hz)" << std::endl;
+                }
 
                 //clear the buffer
                 std::fill(channelData, channelData + buffer.getNumSamples(), 0.0f);
@@ -259,7 +260,8 @@ if (frequency > sampleRate / 2) {
                 for (int i = 0; i < buffer.getNumSamples(); ++i)
                 {
                     //create sine wave of strongest frequency
-                    phase += 2.0f * juce::MathConstants<float>::pi * frequency / sampleRate;
+                    phase += juce::MathConstants<float>::pi * frequency / sampleRate;
+                    phase = std::fmod(phase, 2.0f * juce::MathConstants<float>::pi);
                     channelData[i] = sin(phase);
                 }
                 lastphase = phase;
