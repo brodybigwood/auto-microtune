@@ -159,7 +159,7 @@ void applyBlackmanHarrisWindow(float* data, int numSamples)
 
 
 float lastphase = 0;
-float lastFreq;
+float lastFreq = -1;
 
 class Scale {
     public:
@@ -211,6 +211,11 @@ class Scale {
 std::vector<float> _5lim = {9.0f/8.0f, 5.0f/4.0f, 4.0f/3.0f, 3.0f/2.0f, 5.0f/3.0f, 15.0f/8.0f, 2.0f/1.0f};
 Scale _5lim_500hz(_5lim, 500);  
 
+    struct oscillator{
+        float frequency;
+        float phase = 0.0f;
+    };
+
 
 void SuperautotuneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
@@ -218,7 +223,8 @@ void SuperautotuneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     auto totalNumInputChannels  = getTotalNumInputChannels();
     auto totalNumOutputChannels = getTotalNumOutputChannels();
     float sampleRate = getSampleRate();
-
+static oscillator osc1;
+static oscillator osc2;
 
     // In case we have more outputs than inputs, this code clears any output
     // channels that didn't contain input data, (because these aren't
@@ -239,14 +245,31 @@ void SuperautotuneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     int order = 5+std::ceil(std::log2(buffer.getNumSamples()));
     juce::dsp::FFT fft(order);
 
+
+
     if (buffer.getNumChannels() != 0 && buffer.getNumSamples() != 0)
     {
         for (int channel = 1; channel < totalNumInputChannels; ++channel)
         {
 
+int numSamples = buffer.getNumSamples();
+auto* channelData = buffer.getWritePointer(channel);
 
-            auto* channelData = buffer.getWritePointer(channel);
 
+auto oscillate = [&channelData, sampleRate, numSamples](oscillator& osc) {
+
+    float phase = osc.phase;
+    float frequency = osc.frequency;
+
+    for (int i = 0; i < numSamples; ++i) 
+    {
+        // Create the sine wave of the strongest frequency
+        phase += juce::MathConstants<float>::pi * frequency / sampleRate;
+        phase = std::fmod(phase, 2.0f * juce::MathConstants<float>::pi);
+        channelData[i] += sin(phase);  // Directly assign the sine wave value to channelData
+    }
+    osc.phase = phase;  // Update oscillator phase after processing
+    };
 
             if (channelData == nullptr) {
                 DBG("Error: channelData pointer is null!");
@@ -289,8 +312,7 @@ void SuperautotuneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
                 
                 std::cout << "Frequency before scale: " << frequency << " Hz" << std::endl;
 
-
-
+                
 
                 //idk why but sometimes frequency is negative on startup
                 if(frequency < 0){
@@ -304,19 +326,18 @@ void SuperautotuneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
                 frequency = _5lim_500hz.findNote(frequency);
                 std::cout << "Frequency after scale: " << frequency << " Hz" << std::endl;
 
-                float phase = lastphase;
-                for (int i = 0; i < buffer.getNumSamples(); ++i)
-                {
-                    //create sine wave of strongest frequency
-                    phase += juce::MathConstants<float>::pi * frequency / sampleRate;
-                    phase = std::fmod(phase, 2.0f * juce::MathConstants<float>::pi);
-                    channelData[i] = sin(phase);
+                if (frequency != lastFreq) {
+                    
+                    osc1.frequency = frequency;
+                    osc2.frequency = frequency*2.0f;
                 }
-                lastphase = phase;
+                
+                oscillate(osc1);
+                oscillate(osc2);
+
+    
 
                 lastFreq = frequency;
-
-
             }
             
         }
