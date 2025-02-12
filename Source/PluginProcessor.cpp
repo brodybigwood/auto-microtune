@@ -335,7 +335,12 @@ auto oscillate = [&channelData, sampleRate, numSamples](oscillator& osc) {
                 oscillate(osc1);
                 oscillate(osc2);
 
-    
+                //normalize
+                auto max_val = *std::max_element(channelData, channelData + numSamples);
+                for (int i = 0; i < numSamples; ++i) 
+                {
+                    channelData[i] /= max_val;  // Divide each element by the divisor
+                }
 
                 lastFreq = frequency;
             }
