@@ -296,8 +296,8 @@ auto oscillate = [&channelData, sampleRate, numSamples](oscillator& osc) {
                 float maxMagnitude = 0.0f;
                 int maxBin = -1;
                 
-                float maxFreq = 10000; //(actually 20k but fft has halved frequencies)
-                int maxBinIndex = static_cast<int>((maxFreq / sampleRate) * fftData.size());
+                float maxFreq = 1500;
+                int maxBinIndex = static_cast<int>((2 * maxFreq / sampleRate) * fftData.size());
                 for (int i = 0; i < maxBinIndex; ++i)
                 {
                     if (fftData[i] > maxMagnitude)
@@ -308,7 +308,7 @@ auto oscillate = [&channelData, sampleRate, numSamples](oscillator& osc) {
                 }
 
                 // Calculate frequency and print it
-                float frequency = 2* (maxBin * sampleRate) / fft.getSize();
+                float frequency = 2 * (maxBin * sampleRate) / fft.getSize();
                 
                 std::cout << "Frequency before scale: " << frequency << " Hz" << std::endl;
 
@@ -321,7 +321,12 @@ auto oscillate = [&channelData, sampleRate, numSamples](oscillator& osc) {
 
                 //clear the buffer
                 std::fill(channelData, channelData + buffer.getNumSamples(), 0.0f);
- 
+
+                //map to scale
+                float newFrequency = _5lim_500hz.findNote(frequency);
+                float correctionRatio = newFrequency/frequency;
+
+
                 //map to scale
                 frequency = _5lim_500hz.findNote(frequency);
                 std::cout << "Frequency after scale: " << frequency << " Hz" << std::endl;
@@ -341,6 +346,10 @@ auto oscillate = [&channelData, sampleRate, numSamples](oscillator& osc) {
                 {
                     channelData[i] /= max_val;  // Divide each element by the divisor
                 }
+
+                
+
+
 
                 lastFreq = frequency;
             }
