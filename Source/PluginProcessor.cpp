@@ -211,10 +211,11 @@ class Scale {
 std::vector<float> _5lim = {9.0f/8.0f, 5.0f/4.0f, 4.0f/3.0f, 3.0f/2.0f, 5.0f/3.0f, 15.0f/8.0f, 2.0f/1.0f};
 Scale _5lim_500hz(_5lim, 500);  
 
-    struct oscillator{
-        float frequency;
-        float phase = 0.0f;
-    };
+struct oscillator{
+    float frequency;
+    float phase = 0.0f;
+};
+
 
 
 void SuperautotuneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
@@ -223,8 +224,15 @@ void SuperautotuneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     auto totalNumInputChannels  = getTotalNumInputChannels();
     auto totalNumOutputChannels = getTotalNumOutputChannels();
     float sampleRate = getSampleRate();
+int order = 5+std::ceil(std::log2(buffer.getNumSamples()));
+juce::dsp::FFT fft(order);
 static oscillator osc1;
 static oscillator osc2;
+//output
+std::vector<std::complex<float>> fft_in(1 << order, {0.0f, 0.0f});
+std::vector<std::complex<float>> fft_out(1 << order, {0.0f, 0.0f});
+
+
 
     // In case we have more outputs than inputs, this code clears any output
     // channels that didn't contain input data, (because these aren't
@@ -242,8 +250,6 @@ static oscillator osc2;
     // the samples and the outer loop is handling the channels.
     // Alternatively, you can process the samples with the channels
     // interleaved by keeping the same state.
-    int order = 5+std::ceil(std::log2(buffer.getNumSamples()));
-    juce::dsp::FFT fft(order);
 
 
 
@@ -276,44 +282,43 @@ auto oscillate = [&channelData, sampleRate, numSamples](oscillator& osc) {
                 return;
             }
             else {
-
-                //applyHammingWindow(channelData, buffer.getNumSamples());
-                
-                std::vector<float> fftData;
-                
-                fftData.resize(std::pow(2, order+1), 0.0f);
-                
-                std::memcpy(fftData.data(), channelData, buffer.getNumSamples() * sizeof(float));
-
-                applyHammingWindow(fftData.data(), std::pow(2, order+1));
- 
-                // transform to frequency domain
-                fft.performFrequencyOnlyForwardTransform(fftData.data(), true);
                 
 
 
+                for (size_t i = 0; i < buffer.getNumSamples(); ++i) {
+                    // hamming window
+                    float windowValue = 0.54f - 0.46f * std::cos(2.0f * M_PI * i / (buffer.getNumSamples() - 1));
+                    //copy windowed buffer samples into fft complex array
+                    fft_in[i] = std::complex<float>(channelData[i] * windowValue, 0.0f);
+                }
+
+
+                //fill output with bins
+                fft.perform(fft_in.data(), fft_out.data(), true);
+
+
+                //get bin with max magnitude
 
                 float maxMagnitude = 0.0f;
                 int maxBin = -1;
-                
                 float maxFreq = 1500;
-                int maxBinIndex = static_cast<int>((2 * maxFreq / sampleRate) * fftData.size());
+                int maxBinIndex = static_cast<int>((2 * maxFreq / sampleRate) * fft_out.size());
+
                 for (int i = 0; i < maxBinIndex; ++i)
                 {
-                    if (fftData[i] > maxMagnitude)
+                    if (std::abs(fft_out[i]) > maxMagnitude)
                     {
-                        maxMagnitude = fftData[i];
+                        maxMagnitude = std::abs(fft_out[i]);
                         maxBin = i;
                     }
                 }
 
                 // Calculate frequency and print it
-                float frequency = 2 * (maxBin * sampleRate) / fft.getSize();
+                float frequency = 2 * (maxBin * sampleRate) / fft_out.size();
                 
                 std::cout << "Frequency before scale: " << frequency << " Hz" << std::endl;
 
-                
-
+            
                 //idk why but sometimes frequency is negative on startup
                 if(frequency < 0){
                     frequency = 0;
@@ -334,11 +339,9 @@ auto oscillate = [&channelData, sampleRate, numSamples](oscillator& osc) {
                 if (frequency != lastFreq) {
                     
                     osc1.frequency = frequency;
-                    osc2.frequency = frequency*2.0f;
                 }
                 
                 oscillate(osc1);
-                oscillate(osc2);
 
                 //normalize
                 auto max_val = *std::max_element(channelData, channelData + numSamples);
