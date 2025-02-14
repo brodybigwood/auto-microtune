@@ -224,13 +224,18 @@ void SuperautotuneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     auto totalNumInputChannels  = getTotalNumInputChannels();
     auto totalNumOutputChannels = getTotalNumOutputChannels();
     float sampleRate = getSampleRate();
-int order = 5+std::ceil(std::log2(buffer.getNumSamples()));
+int order = 1+std::ceil(std::log2(buffer.getNumSamples()));
 juce::dsp::FFT fft(order);
 static oscillator osc1;
 static oscillator osc2;
 //output
 std::vector<std::complex<float>> fft_in(1 << order, {0.0f, 0.0f});
 std::vector<std::complex<float>> fft_out(1 << order, {0.0f, 0.0f});
+std::vector<float> phases(pow(2,order), 0.0f);
+
+bool phaseSet = false;
+
+
 
 
 
@@ -257,9 +262,32 @@ std::vector<std::complex<float>> fft_out(1 << order, {0.0f, 0.0f});
     {
         for (int channel = 1; channel < totalNumInputChannels; ++channel)
         {
-
+std::cout << "263" << std::endl;
 int numSamples = buffer.getNumSamples();
 auto* channelData = buffer.getWritePointer(channel);
+
+auto nextPhaseLambda = [numSamples, sampleRate](float frequency, float phase) -> float
+{
+    // phase increment per sample
+    float phaseIncrement = 2 * M_PI * frequency / sampleRate;
+    int samplesLeft = numSamples - static_cast<int>(phase * numSamples / (2 * M_PI));
+    phase += phaseIncrement * samplesLeft;
+    
+    if (phase >= M_PI)
+        phase -= 2 * M_PI;
+    else if (phase < -1 * M_PI)
+        phase += 2 * M_PI;
+
+    return phase;
+};
+
+auto sinc = [](float x) -> float
+{
+    if (x == 0.0f) return 1.0f;
+    return sin(M_PI * x) / (M_PI * x);
+};
+
+
 
 
 auto oscillate = [&channelData, sampleRate, numSamples](oscillator& osc) {
@@ -283,20 +311,23 @@ auto oscillate = [&channelData, sampleRate, numSamples](oscillator& osc) {
             }
             else {
                 
-
-
+std::cout << "306" << std::endl;
+                std::vector<float> fftData(static_cast<size_t>(pow(2, order + 1)), 0.0f);
+std::cout << "308" << std::endl;
                 for (size_t i = 0; i < buffer.getNumSamples(); ++i) {
                     // hamming window
-                    float windowValue = 0.54f - 0.46f * std::cos(2.0f * M_PI * i / (buffer.getNumSamples() - 1));
+                    //float windowValue = 0.54f - 0.46f * std::cos(2.0f * M_PI * i / (buffer.getNumSamples() - 1));
                     //copy windowed buffer samples into fft complex array
-                    fft_in[i] = std::complex<float>(channelData[i] * windowValue, 0.0f);
+                    fft_in[i] = std::complex<float>(channelData[i], 0.0f);
+                    fftData[i] = channelData[i];
                 }
 
 
                 //fill output with bins
-                fft.perform(fft_in.data(), fft_out.data(), true);
+                fft.perform(fft_in.data(), fft_out.data(), false);
 
-
+           std::cout << "321" << std::endl;     
+                //fft.performFrequencyOnlyForwardTransform(fftData.data());
                 //get bin with max magnitude
 
                 float maxMagnitude = 0.0f;
@@ -330,8 +361,67 @@ auto oscillate = [&channelData, sampleRate, numSamples](oscillator& osc) {
                 //map to scale
                 float newFrequency = _5lim_500hz.findNote(frequency);
                 float correctionRatio = newFrequency/frequency;
+                //correctionRatio = 1;
+
+                //change pitch
+                std::vector<std::complex<float>> shifted_bins(fft_out.size(), {0.0f, 0.0f});
+
+                for(int bin = 0; bin < fft_out.size(); ++bin)
+                {
+                    float binFrequency = static_cast<float>(bin) * (sampleRate / fft_out.size());
+                    float shiftedFrequency = 2*binFrequency * correctionRatio;
+                    //shifted_bins[bin] = fft_out[bin];
+                        //phases[bin] = nextPhaseLambda(shiftedFrequency, phases[bin]);
+                    
+                    float shiftedBin = correctionRatio * static_cast<float>(bin);
 
 
+                    //no interpolation
+                    //int intShiftedBin = static_cast<int>(shiftedBin);
+                    //intShiftedBin = bin;
+
+                    int intShiftedBinLow = static_cast<int>(std::floor(shiftedBin));
+                    int intShiftedBinHigh = intShiftedBinLow + 1;
+
+                    float distanceLow = shiftedBin - intShiftedBinLow;
+                    float distanceHigh = 1.0f - distanceLow;
+
+                    float weightLow = sinc(distanceLow);
+                    float weightHigh = sinc(distanceHigh);
+
+                    if (intShiftedBinLow < fft_out.size()) 
+                    {
+                        shifted_bins[intShiftedBinLow] = fft_out[bin] * weightLow;
+                        phases[intShiftedBinLow] = nextPhaseLambda(shiftedFrequency, phases[bin]);
+                    }
+
+                    if (intShiftedBinHigh < fft_out.size()) 
+                    {
+                        shifted_bins[intShiftedBinHigh] = fft_out[bin] * weightHigh;
+                    }
+                    
+/*
+                    if (intShiftedBin < fft_out.size())
+                    {
+
+                        shifted_bins[intShiftedBin] = std::complex<float> {fft_out[bin].real(),phases[intShiftedBin]};
+                        phases[intShiftedBin] = nextPhaseLambda(shiftedFrequency, phases[bin]);
+                        //shifted_bins[fftData.size() - intShiftedBin - 1] = std::conj(shifted_bins[intShiftedBin]);
+                    }*/
+                }
+                //shifted_bins = fft_out;
+
+                
+                //test: put fft data back into buffer
+                fft.perform(shifted_bins.data(), fft_out.data(), true);
+                
+                for (size_t i = 0; i < buffer.getNumSamples(); ++i) 
+                {
+                    channelData[i] = std::abs(fft_out[i]);
+                }
+                std::cout << channelData[buffer.getNumSamples()-1] <<std::endl;
+
+                /* SIMPLE OSCILLATION
                 //map to scale
                 frequency = _5lim_500hz.findNote(frequency);
                 std::cout << "Frequency after scale: " << frequency << " Hz" << std::endl;
@@ -343,18 +433,10 @@ auto oscillate = [&channelData, sampleRate, numSamples](oscillator& osc) {
                 
                 oscillate(osc1);
 
-                //normalize
-                auto max_val = *std::max_element(channelData, channelData + numSamples);
-                for (int i = 0; i < numSamples; ++i) 
-                {
-                    channelData[i] /= max_val;  // Divide each element by the divisor
-                }
-
-                
-
-
 
                 lastFreq = frequency;
+
+                */
             }
             
         }
