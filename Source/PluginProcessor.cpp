@@ -1,20 +1,19 @@
 /*
   ==============================================================================
-
-    This file contains the basic framework code for a JUCE plugin processor.
-
+    super-autotune — Audio Processor implementation
   ==============================================================================
 */
 
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
-#include <juce_dsp/juce_dsp.h>
-#include <cmath>
-
+#include "PitchDetector.h"
+#include "PitchShifter.h"
+#include "TuningManager.h"
+#include "MidiManager.h"
+#include "SpectrumAnalyzer.h"
 
 //==============================================================================
 SuperautotuneAudioProcessor::SuperautotuneAudioProcessor()
-#ifndef JucePlugin_PreferredChannelConfigurations
      : AudioProcessor (BusesProperties()
                      #if ! JucePlugin_IsMidiEffect
                       #if ! JucePlugin_IsSynth
@@ -22,14 +21,17 @@ SuperautotuneAudioProcessor::SuperautotuneAudioProcessor()
                       #endif
                        .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
                      #endif
-                       )
-#endif
+                       ),
+       apvts(*this, nullptr, "PARAMETERS", createParameterLayout())
 {
+    pitchDetector    = std::make_unique<PitchDetector>();
+    pitchShifter     = std::make_unique<PitchShifter>();
+    tuningManager    = std::make_unique<TuningManager>();
+    midiManager      = std::make_unique<MidiManager>();
+    spectrumAnalyzer = std::make_unique<SpectrumAnalyzer>();
 }
 
-SuperautotuneAudioProcessor::~SuperautotuneAudioProcessor()
-{
-}
+SuperautotuneAudioProcessor::~SuperautotuneAudioProcessor() = default;
 
 //==============================================================================
 const juce::String SuperautotuneAudioProcessor::getName() const
@@ -66,13 +68,15 @@ bool SuperautotuneAudioProcessor::isMidiEffect() const
 
 double SuperautotuneAudioProcessor::getTailLengthSeconds() const
 {
-    return 0.0;
+    // The shifter holds `latency` samples of history; if the host cuts us off
+    // with no reported tail, those samples pop.
+    return static_cast<double>(pitchShifter ? pitchShifter->getLatencySamples() : 0)
+         / getSampleRate();
 }
 
 int SuperautotuneAudioProcessor::getNumPrograms()
 {
-    return 1;   // NB: some hosts don't cope very well if you tell them there are 0 programs,
-                // so this should be at least 1, even if you're not really implementing programs.
+    return 1;
 }
 
 int SuperautotuneAudioProcessor::getCurrentProgram()
@@ -82,363 +86,291 @@ int SuperautotuneAudioProcessor::getCurrentProgram()
 
 void SuperautotuneAudioProcessor::setCurrentProgram (int index)
 {
+    juce::ignoreUnused(index);
 }
 
 const juce::String SuperautotuneAudioProcessor::getProgramName (int index)
 {
+    juce::ignoreUnused(index);
     return {};
 }
 
 void SuperautotuneAudioProcessor::changeProgramName (int index, const juce::String& newName)
 {
+    juce::ignoreUnused(index, newName);
 }
 
 //==============================================================================
-void SuperautotuneAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
+void SuperautotuneAudioProcessor::prepareToPlay (double sr, int blockSize)
 {
-    // Use this method as the place to do any pre-playback
-    // initialisation that you need..
+    auto numChannels = getTotalNumInputChannels();
+
+    // Cache current parameter values
+    auto* fftParam     = apvts.getRawParameterValue(ParamIDs::fftSize);
+    auto* hopParam     = apvts.getRawParameterValue(ParamIDs::hopPercent);
+    auto* retuneParam  = apvts.getRawParameterValue(ParamIDs::retuneSpeed);
+    auto* modeParam    = apvts.getRawParameterValue(ParamIDs::tuningMode);
+    auto* midiParam    = apvts.getRawParameterValue(ParamIDs::midiEnabled);
+    auto* octParam     = apvts.getRawParameterValue(ParamIDs::octaveExtend);
+    auto* wetParam     = apvts.getRawParameterValue(ParamIDs::wetDry);
+    auto* bypassParam  = apvts.getRawParameterValue(ParamIDs::bypass);
+
+    currentFftIndex      = static_cast<int>(fftParam->load());
+    currentFftSize       = FFTSizes::getValue(currentFftIndex);
+    currentHopIndex      = static_cast<int>(hopParam->load());
+    currentHopSize       = HopPercent::getHopSize(currentFftSize, currentHopIndex);
+    currentRetuneSpeed   = retuneParam->load();
+    currentTuningMode    = static_cast<int>(modeParam->load());
+    currentMidiEnabled   = midiParam->load() > 0.5f;
+    currentOctaveExtend  = octParam->load() > 0.5f;
+    currentWetDry        = wetParam->load();
+    currentBypass        = bypassParam->load() > 0.5f;
+
+    // Prepare DSP components. The shifter owns its input rings and runs its own
+    // pitch detector, so the FFT size parameter now only affects the spectrum
+    // display — it no longer has anything to do with the pitch shifting, which is
+    // time-domain.
+    pitchDetector->prepare(currentFftSize, sr);
+    pitchShifter->prepare(sr, blockSize, numChannels);
+    spectrumAnalyzer->prepare(currentFftSize, sr);
+
+    // Scratch buffers, block sized: the shifter streams in and out, so there are
+    // no FFT-sized frame buffers any more.
+    multiplyFrameSum.resize(static_cast<size_t> (blockSize));
+    multiplyFrame.resize(static_cast<size_t> (blockSize));
+
+    // Dry/wet buffers
+    dryBuffer.setSize(numChannels, blockSize, false, true);
+    processedBuffer.setSize(numChannels, blockSize, false, true);
+
+    // Per-voice phase states + per-channel dry delay lines
+    rebuildVoiceResources();
+
+    // Report latency. The shifter's latency is a fixed ring multiple, independent
+    // of pitch and of the shift ratio, so the host's compensation is exact. (The
+    // old value was fftSize - hopSize, which was not the real OLA latency anyway.)
+    setLatencySamples(pitchShifter->getLatencySamples());
+
+    // Clear state
+    detectedPitch.store(0.0f);
+    targetPitch.store(0.0f);
+    targetNoteIndex.store(-1);
+    fftConfigChanged.store(false);
+    tuningConfigChanged.store(false);
+
+    prepared = true;
+}
+
+void SuperautotuneAudioProcessor::rebuildVoiceResources()
+{
+    int numChannels = std::max(getTotalNumInputChannels(), 1);
+    stateStride = maxMultiplyVoices;
+
+    voiceStates.clear();
+    voiceStates.reserve(static_cast<size_t>(numChannels) * stateStride);
+    for (int i = 0; i < numChannels * stateStride; ++i)
+        voiceStates.push_back(pitchShifter->makeState());
+
+    // The dry path must be delayed by exactly the shifter's latency, or the wet
+    // and dry branches comb against each other at any MIX below 100%.
+    dryDelays.clear();
+    dryDelays.resize(numChannels);
+    for (auto& dd : dryDelays)
+        dd.prepare(pitchShifter->getLatencySamples());
 }
 
 void SuperautotuneAudioProcessor::releaseResources()
 {
-    // When playback stops, you can use this as an opportunity to free up any
-    // spare memory, etc.
+    pitchDetector->reset();
+    pitchShifter->reset();
+    midiManager->reset();
+    voiceStates.clear();
+    prepared = false;
 }
 
 #ifndef JucePlugin_PreferredChannelConfigurations
 bool SuperautotuneAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
-  #if JucePlugin_IsMidiEffect
-    juce::ignoreUnused (layouts);
-    return true;
-  #else
-    // This is the place where you check if the layout is supported.
-    // In this template code we only support mono or stereo.
-    // Some plugin hosts, such as certain GarageBand versions, will only
-    // load plugins that support stereo bus layouts.
     if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::mono()
-     && layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
+        && layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
         return false;
 
-    // This checks if the input layout matches the output layout
-   #if ! JucePlugin_IsSynth
     if (layouts.getMainOutputChannelSet() != layouts.getMainInputChannelSet())
         return false;
-   #endif
 
     return true;
-  #endif
 }
 #endif
 
-void applyHammingWindow(float* data, int numSamples)
+//==============================================================================
+void SuperautotuneAudioProcessor::handleParameterChanges()
 {
-    for (int i = 0; i < numSamples; ++i)
+    // Check for FFT/hop changes (require re-prepare of DSP components)
+    auto fftIdx = static_cast<int>(apvts.getRawParameterValue(ParamIDs::fftSize)->load());
+    auto hopIdx = static_cast<int>(apvts.getRawParameterValue(ParamIDs::hopPercent)->load());
+
+    if (fftIdx != currentFftIndex || hopIdx != currentHopIndex)
     {
-        // Apply the Hamming window
-        data[i] *= 0.54f - 0.46f * cosf(2.0f * juce::MathConstants<float>::pi * i / (numSamples - 1));
+        currentFftIndex = fftIdx;
+        currentFftSize  = FFTSizes::getValue(fftIdx);
+        currentHopIndex = hopIdx;
+        currentHopSize  = HopPercent::getHopSize(currentFftSize, hopIdx);
+
+        fftConfigChanged.store(true);
     }
+
+    // Smooth parameters
+    currentRetuneSpeed   = apvts.getRawParameterValue(ParamIDs::retuneSpeed)->load();
+    currentTuningMode    = static_cast<int>(apvts.getRawParameterValue(ParamIDs::tuningMode)->load());
+    currentMidiEnabled   = apvts.getRawParameterValue(ParamIDs::midiEnabled)->load() > 0.5f;
+    currentOctaveExtend  = apvts.getRawParameterValue(ParamIDs::octaveExtend)->load() > 0.5f;
+    currentWetDry        = apvts.getRawParameterValue(ParamIDs::wetDry)->load();
+    currentBypass        = apvts.getRawParameterValue(ParamIDs::bypass)->load() > 0.5f;
 }
 
-void applyBlackmanHarrisWindow(float* data, int numSamples)
-{
-    for (int i = 0; i < numSamples; ++i)
-    {
-        // Apply the Blackman-Harris window
-        float a0 = 0.35875f;
-        float a1 = 0.48829f;
-        float a2 = 0.14128f;
-        float a3 = 0.01168f;
-        
-        data[i] *= a0 - a1 * cosf(2.0f * juce::MathConstants<float>::pi * i / (numSamples - 1))
-                      + a2 * cosf(4.0f * juce::MathConstants<float>::pi * i / (numSamples - 1))
-                      - a3 * cosf(6.0f * juce::MathConstants<float>::pi * i / (numSamples - 1));
-    }
-}
-
-
-float lastphase = 0;
-float lastFreq = -1;
-
-class Scale {
-    public:
-    //first arg: an array of frequency ratios for the scale
-    //2nd arg: home frequency of the scale
-    Scale(const std::vector<float>& values, float freq) : scale(values), baseFrequency(reduceF(freq)) {}
-
-    float findNote(float inputFreq)
-    {
-        if(inputFreq == 0)
-        {
-            return 0.0f;
-        }
-        float minDifference = 120000000000;
-        int scaleIndex;
-        int power;
-        float relativeFrequency;
-        float octave;
-        for (size_t i = 0; i < scale.size(); ++i)
-        {
-            for(int p = 0; p < 10; ++p){
-                octave = baseFrequency*std::pow(2, p);
-                float difference = std::abs(1200*log2(inputFreq/(octave*scale[i])));
-                if (difference<minDifference)
-                {
-                    minDifference = difference;
-                    scaleIndex = i;
-                    relativeFrequency = baseFrequency*std::pow(2, p);
-
-                }
-            }
-        }
-        float outputNote = relativeFrequency * scale[scaleIndex];
-        return outputNote;
-    }
-    private:
-        float reduceF(float freq)
-    {
-        while(freq > 30)
-        {
-            freq/=2;
-        }
-        return freq;
-    }
-    float baseFrequency;
-    std::vector<float> scale;
-};
-
-std::vector<float> _5lim = {9.0f/8.0f, 5.0f/4.0f, 4.0f/3.0f, 3.0f/2.0f, 5.0f/3.0f, 15.0f/8.0f, 2.0f/1.0f};
-Scale _5lim_500hz(_5lim, 500);  
-
-struct oscillator{
-    float frequency;
-    float phase = 0.0f;
-};
-
-
-
-void SuperautotuneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
+//==============================================================================
+void SuperautotuneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
+                                                juce::MidiBuffer& midiMessages)
 {
     juce::ScopedNoDenormals noDenormals;
-    auto totalNumInputChannels  = getTotalNumInputChannels();
-    auto totalNumOutputChannels = getTotalNumOutputChannels();
-    float sampleRate = getSampleRate();
-int order = 1+std::ceil(std::log2(buffer.getNumSamples()));
-juce::dsp::FFT fft(order);
-static oscillator osc1;
-static oscillator osc2;
-//output
-std::vector<std::complex<float>> fft_in(1 << order, {0.0f, 0.0f});
-std::vector<std::complex<float>> fft_out(1 << order, {0.0f, 0.0f});
-std::vector<float> phases(pow(2,order), 0.0f);
+    auto numChannels = getTotalNumInputChannels();
+    auto numSamples  = buffer.getNumSamples();
 
-bool phaseSet = false;
+    // Clear unused output channels
+    for (auto i = numChannels; i < getTotalNumOutputChannels(); ++i)
+        buffer.clear(i, 0, numSamples);
 
+    // Handle parameter changes
+    handleParameterChanges();
 
-
-
-
-    // In case we have more outputs than inputs, this code clears any output
-    // channels that didn't contain input data, (because these aren't
-    // guaranteed to be empty - they may contain garbage).
-    // This is here to avoid people getting screaming feedback
-    // when they first compile a plugin, but obviously you don't need to keep
-    // this code if your algorithm always overwrites all the output channels.
-    for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
-        buffer.clear (i, 0, buffer.getNumSamples());
-
-
-    // This is the place where you'd normally do the guts of your plugin's
-    // audio processing...
-    // Make sure to reset the state if your inner loop is processing
-    // the samples and the outer loop is handling the channels.
-    // Alternatively, you can process the samples with the channels
-    // interleaved by keeping the same state.
-
-
-
-    if (buffer.getNumChannels() != 0 && buffer.getNumSamples() != 0)
+    // The FFT size parameter only drives the spectrum display now. The shifter is
+    // time-domain, so there is nothing to reconfigure when it changes.
+    if (fftConfigChanged.load())
     {
-        for (int channel = 1; channel < totalNumInputChannels; ++channel)
-        {
-std::cout << "263" << std::endl;
-int numSamples = buffer.getNumSamples();
-auto* channelData = buffer.getWritePointer(channel);
-
-auto nextPhaseLambda = [numSamples, sampleRate](float frequency, float phase) -> float
-{
-    // phase increment per sample
-    float phaseIncrement = 2 * M_PI * frequency / sampleRate;
-    int samplesLeft = numSamples - static_cast<int>(phase * numSamples / (2 * M_PI));
-    phase += phaseIncrement * samplesLeft;
-    
-    if (phase >= M_PI)
-        phase -= 2 * M_PI;
-    else if (phase < -1 * M_PI)
-        phase += 2 * M_PI;
-
-    return phase;
-};
-
-auto sinc = [](float x) -> float
-{
-    if (x == 0.0f) return 1.0f;
-    return sin(M_PI * x) / (M_PI * x);
-};
-
-
-
-
-auto oscillate = [&channelData, sampleRate, numSamples](oscillator& osc) {
-
-    float phase = osc.phase;
-    float frequency = osc.frequency;
-
-    for (int i = 0; i < numSamples; ++i) 
-    {
-        // Create the sine wave of the strongest frequency
-        phase += juce::MathConstants<float>::pi * frequency / sampleRate;
-        phase = std::fmod(phase, 2.0f * juce::MathConstants<float>::pi);
-        channelData[i] += sin(phase);  // Directly assign the sine wave value to channelData
+        pitchDetector->prepare(currentFftSize, getSampleRate());
+        spectrumAnalyzer->prepare(currentFftSize, getSampleRate());
+        fftConfigChanged.store(false);
     }
-    osc.phase = phase;  // Update oscillator phase after processing
-    };
 
-            if (channelData == nullptr) {
-                DBG("Error: channelData pointer is null!");
-                return;
+    // If bypassed or not prepared, passthrough
+    if (currentBypass || !prepared)
+        return;
+
+    // === STEP 1: Process MIDI ===
+    midiManager->process(midiMessages, getSampleRate());
+
+    // === STEP 2: Update tuning set ===
+    tuningManager->setOctaveExtend(currentOctaveExtend);
+    tuningManager->setMidiEnabled(currentMidiEnabled);
+    tuningManager->setMidiNotes(midiManager->getActiveNoteFrequencies());
+
+    // === STEP 3: Save dry input for wet/dry mix ===
+    for (int ch = 0; ch < numChannels; ++ch)
+        dryBuffer.copyFrom(ch, 0, buffer, ch, 0, numSamples);
+
+    processedBuffer.clear();
+
+    // === STEP 4: Per-channel processing ===
+    for (int ch = 0; ch < numChannels; ++ch)
+    {
+        auto* channelData = buffer.getReadPointer(ch);
+
+        // Feed this channel once. The shifter runs its own detector on a fixed
+        // internal hop, and every voice of this channel reads the same input ring
+        // and the same pitch estimate — that is what keeps the stereo image stable
+        // and stops voices from drifting apart.
+        pitchShifter->pushChannel(ch, channelData, numSamples);
+
+        const float currentFreq = pitchShifter->getDetectedPitch(ch);
+        detectedPitch.store(currentFreq);
+
+        // Feed the spectrum analyzer (windowed). fillWindowingTables writes
+        // fftSize+1 samples, so allocate that many, then truncate to fftSize.
+        if (numSamples >= currentFftSize)
+        {
+            std::vector<float> windowedCopy(currentFftSize);
+            std::vector<float> spectrumWindow(currentFftSize + 1);
+            juce::dsp::WindowingFunction<float>::fillWindowingTables(
+                spectrumWindow.data(), currentFftSize + 1,
+                juce::dsp::WindowingFunction<float>::hann, false);
+            for (int i = 0; i < currentFftSize; ++i)
+                windowedCopy[i] = channelData[numSamples - currentFftSize + i] * spectrumWindow[i];
+            spectrumAnalyzer->feed(windowedCopy.data(), currentFftSize);
+        }
+
+        // Base index into the per-voice state pool for this channel.
+        const int chBase = ch * stateStride;
+        auto* outData = processedBuffer.getWritePointer(ch);
+
+        if (currentTuningMode == 0)  // Snap mode: one voice at the nearest allowed note
+        {
+            // ONE lookup supplies both the frequency the audio snaps to and the
+            // note the UI highlights, so they cannot disagree. An invalid result
+            // (nothing selected, or no pitch) means no correction: the shifter
+            // treats a non-positive target as ratio 1 and stays transparent.
+            const TuningTarget target = tuningManager->findTarget(currentFreq);
+
+            targetPitch.store(target.valid ? target.freqHz : 0.0f);
+            targetNoteIndex.store(target.valid ? target.midiNote : -1);
+
+            pitchShifter->render(voiceStates[chBase], ch, outData, numSamples,
+                                 target.valid ? target.freqHz : 0.0f, currentRetuneSpeed);
+        }
+        else  // Multiply mode: one voice per active note, capped
+        {
+            const int numVoices = std::min(tuningManager->getVoiceCount(), maxMultiplyVoices);
+
+            if (numVoices <= 0)
+            {
+                pitchShifter->render(voiceStates[chBase], ch, outData, numSamples,
+                                     0.0f, currentRetuneSpeed);
             }
-            else {
-                
-std::cout << "306" << std::endl;
-                std::vector<float> fftData(static_cast<size_t>(pow(2, order + 1)), 0.0f);
-std::cout << "308" << std::endl;
-                for (size_t i = 0; i < buffer.getNumSamples(); ++i) {
-                    // hamming window
-                    //float windowValue = 0.54f - 0.46f * std::cos(2.0f * M_PI * i / (buffer.getNumSamples() - 1));
-                    //copy windowed buffer samples into fft complex array
-                    fft_in[i] = std::complex<float>(channelData[i], 0.0f);
-                    fftData[i] = channelData[i];
-                }
+            else
+            {
+                std::fill(multiplyFrameSum.begin(), multiplyFrameSum.begin() + numSamples, 0.0f);
 
-
-                //fill output with bins
-                fft.perform(fft_in.data(), fft_out.data(), false);
-
-           std::cout << "321" << std::endl;     
-                //fft.performFrequencyOnlyForwardTransform(fftData.data());
-                //get bin with max magnitude
-
-                float maxMagnitude = 0.0f;
-                int maxBin = -1;
-                float maxFreq = 1500;
-                int maxBinIndex = static_cast<int>((2 * maxFreq / sampleRate) * fft_out.size());
-
-                for (int i = 0; i < maxBinIndex; ++i)
+                for (int v = 0; v < numVoices; ++v)
                 {
-                    if (std::abs(fft_out[i]) > maxMagnitude)
-                    {
-                        maxMagnitude = std::abs(fft_out[i]);
-                        maxBin = i;
-                    }
+                    const float targetFreq = tuningManager->getMultiplyNote(currentFreq, v);
+
+                    // Independent state per (channel, voice): each voice has its
+                    // own read cursor and ratio.
+                    pitchShifter->render(voiceStates[chBase + v], ch, multiplyFrame.data(),
+                                         numSamples, targetFreq, currentRetuneSpeed);
+
+                    for (int i = 0; i < numSamples; ++i)
+                        multiplyFrameSum[i] += multiplyFrame[i];
                 }
 
-                // Calculate frequency and print it
-                float frequency = 2 * (maxBin * sampleRate) / fft_out.size();
-                
-                std::cout << "Frequency before scale: " << frequency << " Hz" << std::endl;
+                // Sum of N voices, divided by count so N full-scale voices come
+                // back at ~full scale instead of clipping.
+                const float gain = 1.0f / static_cast<float>(numVoices);
+                for (int i = 0; i < numSamples; ++i)
+                    outData[i] = multiplyFrameSum[i] * gain;
 
-            
-                //idk why but sometimes frequency is negative on startup
-                if(frequency < 0){
-                    frequency = 0;
-                }
-
-                //clear the buffer
-                std::fill(channelData, channelData + buffer.getNumSamples(), 0.0f);
-
-                //map to scale
-                float newFrequency = _5lim_500hz.findNote(frequency);
-                float correctionRatio = newFrequency/frequency;
-                //correctionRatio = 1;
-
-                //change pitch
-                std::vector<std::complex<float>> shifted_bins(fft_out.size(), {0.0f, 0.0f});
-
-                for(int bin = 0; bin < fft_out.size(); ++bin)
-                {
-                    float binFrequency = static_cast<float>(bin) * (sampleRate / fft_out.size());
-                    float shiftedFrequency = 2*binFrequency * correctionRatio;
-                    //shifted_bins[bin] = fft_out[bin];
-                        //phases[bin] = nextPhaseLambda(shiftedFrequency, phases[bin]);
-                    
-                    float shiftedBin = correctionRatio * static_cast<float>(bin);
-
-
-                    //no interpolation
-                    //int intShiftedBin = static_cast<int>(shiftedBin);
-                    //intShiftedBin = bin;
-
-                    int intShiftedBinLow = static_cast<int>(std::floor(shiftedBin));
-                    int intShiftedBinHigh = intShiftedBinLow + 1;
-
-                    float distanceLow = shiftedBin - intShiftedBinLow;
-                    float distanceHigh = 1.0f - distanceLow;
-
-                    float weightLow = sinc(distanceLow);
-                    float weightHigh = sinc(distanceHigh);
-
-                    if (intShiftedBinLow < fft_out.size()) 
-                    {
-                        shifted_bins[intShiftedBinLow] = fft_out[bin] * weightLow;
-                        phases[intShiftedBinLow] = nextPhaseLambda(shiftedFrequency, phases[bin]);
-                    }
-
-                    if (intShiftedBinHigh < fft_out.size()) 
-                    {
-                        shifted_bins[intShiftedBinHigh] = fft_out[bin] * weightHigh;
-                    }
-                    
-/*
-                    if (intShiftedBin < fft_out.size())
-                    {
-
-                        shifted_bins[intShiftedBin] = std::complex<float> {fft_out[bin].real(),phases[intShiftedBin]};
-                        phases[intShiftedBin] = nextPhaseLambda(shiftedFrequency, phases[bin]);
-                        //shifted_bins[fftData.size() - intShiftedBin - 1] = std::conj(shifted_bins[intShiftedBin]);
-                    }*/
-                }
-                //shifted_bins = fft_out;
-
-                
-                //test: put fft data back into buffer
-                fft.perform(shifted_bins.data(), fft_out.data(), true);
-                
-                for (size_t i = 0; i < buffer.getNumSamples(); ++i) 
-                {
-                    channelData[i] = std::abs(fft_out[i]);
-                }
-                std::cout << channelData[buffer.getNumSamples()-1] <<std::endl;
-
-                /* SIMPLE OSCILLATION
-                //map to scale
-                frequency = _5lim_500hz.findNote(frequency);
-                std::cout << "Frequency after scale: " << frequency << " Hz" << std::endl;
-
-                if (frequency != lastFreq) {
-                    
-                    osc1.frequency = frequency;
-                }
-                
-                oscillate(osc1);
-
-
-                lastFreq = frequency;
-
-                */
+                targetPitch.store(tuningManager->getActiveNotes().empty()
+                    ? 0.0f : tuningManager->getActiveNotes()[0]);
             }
-            
+        }
+    }
+
+    // === STEP 5: Wet/Dry mix ===
+    // The wet path is delayed by `latency = fftSize - hopSize` samples (the OLA
+    // buffer), so the dry path must be delayed by the same amount before mixing
+    // or the two comb/cancel at wet < 1.0. We already report setLatencySamples()
+    // and the host applies one global delay; the two branches must still be
+    // mutually aligned *here*.
+    for (int ch = 0; ch < numChannels; ++ch)
+    {
+        auto* outData    = buffer.getWritePointer(ch);
+        auto* dryData    = dryBuffer.getReadPointer(ch);
+        auto* wetData    = processedBuffer.getReadPointer(ch);
+        auto& delay      = dryDelays[ch];
+
+        for (int i = 0; i < numSamples; ++i)
+        {
+            float alignedDry = delay.writeThenRead(dryData[i]);
+            outData[i] = (1.0f - currentWetDry) * alignedDry + currentWetDry * wetData[i];
         }
     }
 }
@@ -446,7 +378,7 @@ std::cout << "308" << std::endl;
 //==============================================================================
 bool SuperautotuneAudioProcessor::hasEditor() const
 {
-    return true; // (change this to false if you choose to not supply an editor)
+    return true;
 }
 
 juce::AudioProcessorEditor* SuperautotuneAudioProcessor::createEditor()
@@ -455,21 +387,125 @@ juce::AudioProcessorEditor* SuperautotuneAudioProcessor::createEditor()
 }
 
 //==============================================================================
+void SuperautotuneAudioProcessor::setTuningFilePath(const juce::String& path)
+{
+    tuningFilePath = path;
+    if (path.isNotEmpty())
+    {
+        juce::File file(path);
+        if (file.existsAsFile() && tuningManager)
+            tuningManager->loadScaleFile(file);
+    }
+}
+
+//==============================================================================
+int SuperautotuneAudioProcessor::getNumSpectrumBins() const
+{
+    return spectrumAnalyzer ? spectrumAnalyzer->getNumBins() : 0;
+}
+
+void SuperautotuneAudioProcessor::getSpectrumMagnitudes(float* buffer, int numBins)
+{
+    if (spectrumAnalyzer)
+        spectrumAnalyzer->getMagnitudes(buffer, numBins);
+    else
+        std::fill(buffer, buffer + numBins, 0.0f);
+}
+
+juce::StringArray SuperautotuneAudioProcessor::getActiveNoteNames()
+{
+    return tuningManager ? tuningManager->getActiveNoteNames() : juce::StringArray();
+}
+
+float SuperautotuneAudioProcessor::getNoteFrequency(int midiNote) const
+{
+    return tuningManager ? tuningManager->getNoteFrequency(midiNote) : 0.0f;
+}
+
+float SuperautotuneAudioProcessor::getNoteCents(int midiNote) const
+{
+    return tuningManager ? tuningManager->getNoteCents(midiNote) : 0.0f;
+}
+
+bool SuperautotuneAudioProcessor::hasTuningFile() const
+{
+    return tuningManager && tuningManager->hasTuningFile();
+}
+
+juce::String SuperautotuneAudioProcessor::getScaleDescription() const
+{
+    return tuningManager ? tuningManager->getScaleDescription() : juce::String();
+}
+
+void SuperautotuneAudioProcessor::toggleNote(int midiNote)
+{
+    if (tuningManager) tuningManager->toggleNote(midiNote);
+}
+
+bool SuperautotuneAudioProcessor::isNoteEnabled(int midiNote) const
+{
+    return tuningManager ? tuningManager->isNoteEnabled(midiNote) : false;
+}
+
+//==============================================================================
 void SuperautotuneAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    // You should use this method to store your parameters in the memory block.
-    // You could do that either as raw data, or use the XML or ValueTree classes
-    // as intermediaries to make it easy to save and load complex data.
+    auto state = apvts.copyState();
+    // Store the tuning file path and the note selection. The selection lives in
+    // TuningManager rather than in a parameter (128 individual parameters would be
+    // absurd), so without this it was lost on every reload.
+    state.setProperty("tuningFilePath", tuningFilePath, nullptr);
+    if (tuningManager)
+    {
+        state.setProperty("noteMask", tuningManager->getNoteMask(), nullptr);
+
+        // The mapping itself, not just where it came from: this is what makes the
+        // tuning survive a reload without the file.
+        state.setProperty("tuningTable", tuningManager->getTuningTable(), nullptr);
+    }
+    std::unique_ptr<juce::XmlElement> xml (state.createXml());
+    copyXmlToBinary (*xml, destData);
 }
 
 void SuperautotuneAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
-    // You should use this method to restore your parameters from this memory block,
-    // whose contents will have been created by the getStateInformation() call.
+    std::unique_ptr<juce::XmlElement> xmlState (getXmlFromBinary (data, sizeInBytes));
+    if (xmlState != nullptr)
+        if (xmlState->hasTagName (apvts.state.getType()))
+        {
+            auto tree = juce::ValueTree::fromXml (*xmlState);
+            apvts.replaceState (tree);
+
+            // Restore the tuning. The mapping is carried in the saved state, so this
+            // does not need the file. Re-reading the file is only a fallback for
+            // states saved before the table was stored, and for a file that has
+            // since been edited on disk.
+            tuningFilePath = tree.getProperty("tuningFilePath", "").toString();
+
+            if (tuningManager)
+            {
+                if (tree.hasProperty("tuningTable"))
+                {
+                    tuningManager->setTuningTable(tree.getProperty("tuningTable").toString());
+                }
+                else if (tuningFilePath.isNotEmpty())
+                {
+                    juce::File file(tuningFilePath);
+                    if (file.existsAsFile())
+                        tuningManager->loadScaleFile(file);
+                }
+            }
+
+            // Restore the note selection. After the file load, so a stale mask
+            // cannot be overwritten by the load — loading a tuning file deliberately
+            // leaves the selection alone, and so does this.
+            if (tuningManager)
+                if (tree.hasProperty("noteMask"))
+                    tuningManager->setNoteMask(tree.getProperty("noteMask").toString());
+        }
 }
 
 //==============================================================================
-// This creates new instances of the plugin..
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
     return new SuperautotuneAudioProcessor();

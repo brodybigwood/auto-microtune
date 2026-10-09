@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
 <JUCERPROJECT id="Kmzout" name="super-autotune" projectType="audioplug" useAppConfig="0"
-              addUsingNamespaceToJuceHeader="0" jucerFormatVersion="1">
+              addUsingNamespaceToJuceHeader="0" jucerFormatVersion="1"
+              pluginCharacteristics="pluginWantsMidiIn">
   <MAINGROUP id="mzEoaH" name="super-autotune">
     <GROUP id="{70A9A38E-0C4B-D4FF-B232-22BE789A1C1C}" name="Source">
       <FILE id="ajiipI" name="PluginProcessor.cpp" compile="1" resource="0"
@@ -11,6 +12,24 @@
       <FILE id="Gvxg9u" name="PluginEditor.cpp" compile="1" resource="0"
             file="Source/PluginEditor.cpp"/>
       <FILE id="o0fy43" name="PluginEditor.h" compile="0" resource="0" file="Source/PluginEditor.h"/>
+      <FILE id="prm001" name="Parameters.cpp" compile="1" resource="0" file="Source/Parameters.cpp"/>
+      <FILE id="prm002" name="Parameters.h" compile="0" resource="0" file="Source/Parameters.h"/>
+      <FILE id="pit001" name="PitchDetector.cpp" compile="1" resource="0" file="Source/PitchDetector.cpp"/>
+      <FILE id="pit002" name="PitchDetector.h" compile="0" resource="0" file="Source/PitchDetector.h"/>
+      <FILE id="pit003" name="PitchShifter.cpp" compile="1" resource="0" file="Source/PitchShifter.cpp"/>
+      <FILE id="pit004" name="PitchShifter.h" compile="0" resource="0" file="Source/PitchShifter.h"/>
+      <FILE id="tun001" name="TuningManager.cpp" compile="1" resource="0" file="Source/TuningManager.cpp"/>
+      <FILE id="tun002" name="TuningManager.h" compile="0" resource="0" file="Source/TuningManager.h"/>
+      <FILE id="tun003" name="ScaleFileParser.cpp" compile="1" resource="0" file="Source/ScaleFileParser.cpp"/>
+      <FILE id="tun004" name="ScaleFileParser.h" compile="0" resource="0" file="Source/ScaleFileParser.h"/>
+      <FILE id="mid001" name="MidiManager.cpp" compile="1" resource="0" file="Source/MidiManager.cpp"/>
+      <FILE id="mid002" name="MidiManager.h" compile="0" resource="0" file="Source/MidiManager.h"/>
+      <FILE id="spc001" name="SpectrumAnalyzer.cpp" compile="1" resource="0" file="Source/SpectrumAnalyzer.cpp"/>
+      <FILE id="spc002" name="SpectrumAnalyzer.h" compile="0" resource="0" file="Source/SpectrumAnalyzer.h"/>
+      <FILE id="gui001" name="NeonLookAndFeel.cpp" compile="1" resource="0" file="Source/NeonLookAndFeel.cpp"/>
+      <FILE id="gui002" name="NeonLookAndFeel.h" compile="0" resource="0" file="Source/NeonLookAndFeel.h"/>
+      <FILE id="gui003" name="EditorComponents.cpp" compile="1" resource="0" file="Source/EditorComponents.cpp"/>
+      <FILE id="gui004" name="EditorComponents.h" compile="0" resource="0" file="Source/EditorComponents.h"/>
     </GROUP>
   </MAINGROUP>
   <MODULES>
@@ -27,7 +46,6 @@
     <MODULE id="juce_events" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
     <MODULE id="juce_graphics" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
     <MODULE id="juce_gui_basics" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
-    <MODULE id="juce_gui_extra" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
   </MODULES>
   <JUCEOPTIONS JUCE_STRICT_REFCOUNTEDPOINTER="1" JUCE_VST3_CAN_REPLACE_VST2="0"/>
   <EXPORTFORMATS>
@@ -48,7 +66,6 @@
         <MODULEPATH id="juce_events" path="../../modules"/>
         <MODULEPATH id="juce_graphics" path="../../modules"/>
         <MODULEPATH id="juce_gui_basics" path="../../modules"/>
-        <MODULEPATH id="juce_gui_extra" path="../../modules"/>
         <MODULEPATH id="juce_dsp" path="../../modules"/>
       </MODULEPATHS>
     </VS2022>
@@ -70,7 +87,6 @@
         <MODULEPATH id="juce_events" path="../../juce"/>
         <MODULEPATH id="juce_graphics" path="../../juce"/>
         <MODULEPATH id="juce_gui_basics" path="../../juce"/>
-        <MODULEPATH id="juce_gui_extra" path="../../juce"/>
       </MODULEPATHS>
     </LINUX_MAKE>
   </EXPORTFORMATS>
