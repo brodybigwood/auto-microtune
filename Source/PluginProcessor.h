@@ -115,6 +115,22 @@ public:
     void toggleNote(int midiNote);
     bool isNoteEnabled(int midiNote) const;
 
+    // True while this MIDI note is held down. Kept as an atomic bitmask set on the
+    // audio thread, because MidiManager's map is owned by the audio thread and the
+    // editor must not walk it.
+    bool isMidiNoteHeld(int midiNote) const;
+
+    // Whether this note could be the one the input snaps to. That is the source
+    // notes (held MIDI notes when armed, otherwise the clicked selection) and, when
+    // octave extend is on, every octave of them — so the editor can light up the
+    // whole allowed set rather than just the literal keys.
+    bool isNoteAPossibleTarget(int midiNote) const;
+
+    // Diagnostic readouts for the editor, so "is MIDI getting in" is visible
+    // rather than inferred from behaviour.
+    bool isMidiArmed() const;
+    int  getNumHeldNotes() const;
+
     // What the loaded tuning file maps a note to, or 12-TET if none is loaded.
     // Used to show the actual frequency next to each note in the list.
     float getNoteFrequency(int midiNote) const;
@@ -182,6 +198,11 @@ private:
     std::atomic<float> detectedPitch{0.0f};
     std::atomic<float> targetPitch{0.0f};
     std::atomic<int>   targetNoteIndex{-1};
+
+    // Held MIDI notes, as a 128-bit mask split in two (notes 0-63, 64-127).
+    // Written in processBlock, read by the editor.
+    std::atomic<uint64_t> heldNotesLow{0};
+    std::atomic<uint64_t> heldNotesHigh{0};
 
     // True once prepareToPlay has been called
     bool prepared = false;

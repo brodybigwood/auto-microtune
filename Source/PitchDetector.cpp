@@ -18,6 +18,26 @@ void PitchDetector::prepare(int maxWindowSize, double sr)
     // maxWindowSize (giving f_min = sampleRate / maxWindowSize).
     diffBuffer.resize(maxWindowSize, 0.0f);
     cmndBuffer.resize(maxWindowSize, 0.0f);
+    energyPrefix.resize(static_cast<size_t>(maxWindowSize) + 1, 0.0f);
+
+    // FFT size for the accelerated difference function: enough to hold the
+    // integration window plus the longest lag we search, so the correlation does
+    // not wrap around.
+    const int window   = maxWindowSize / 2;
+    const int tauMax   = static_cast<int>(sampleRate / minFrequency);
+    int       size     = 1;
+    while (size < window + tauMax + 1)
+        size <<= 1;
+
+    fftSize  = size;
+    fftOrder = static_cast<int>(std::log2(size));
+    fft      = std::make_unique<juce::dsp::FFT>(fftOrder);
+
+    const std::complex<float> zero {};
+    xa.assign(static_cast<size_t>(fftSize), zero);
+    xb.assign(static_cast<size_t>(fftSize), zero);
+    xc.assign(static_cast<size_t>(fftSize), zero);
+    xr.assign(static_cast<size_t>(fftSize), zero);
 }
 
 void PitchDetector::reset()
@@ -29,23 +49,59 @@ void PitchDetector::reset()
 void PitchDetector::computeDifferenceFunction(const float* samples, int numSamples,
                                               int tauMax, std::vector<float>& diff)
 {
-    // Direct computation of the YIN difference function:
-    //   d[tau] = sum_{j=0}^{numSamples-tau-1} (x[j] - x[j+tau])^2
-    // This is the correct definition — it does NOT rely on the autocorrelation
-    // approximation (which breaks for low frequencies / short windows).
+    // The YIN difference function, expanded so it can be computed with FFTs:
     //
-    // The sum runs to numSamples-tau-1 so that j+tau stays in range.
+    //   d(tau) = sum_j (x[j] - x[j+tau])^2      over a fixed window W
+    //          = e0 + e1(tau) - 2 r(tau)
+    //
+    // e0 is constant, e1(tau) is the windowed energy at offset tau (a running sum),
+    // and r(tau) is the cross-correlation, which one FFT pair gives for every lag
+    // at once.
+    //
+    // The direct sum is O(numSamples * tauMax) — over a million multiply-adds at
+    // 44.1 kHz — and this runs about 86 times a second per channel, which was
+    // enough to overrun the audio callback and cause dropouts. This is
+    // O(fftSize log fftSize) instead.
+    const int W = numSamples / 2;
+
+    // Start the comparison as late as the window allows, so the estimate uses the
+    // newest audio rather than the oldest. The correlation reads up to
+    // start + W + tauMax - 1, and placing that at the end of the buffer is what
+    // removes the lag an early window would add on a gliding pitch.
+    const int start = std::max(0, numSamples - 1 - tauMax - W + 1);
+
+    // Running sum of squares, so e1(tau) costs a subtraction.
+    energyPrefix[0] = 0.0f;
+    for (int i = 0; i < numSamples; ++i)
+        energyPrefix[static_cast<size_t>(i) + 1] =
+            energyPrefix[static_cast<size_t>(i)] + samples[i] * samples[i];
+
+    const float e0 = energyPrefix[static_cast<size_t>(start + W)]
+                   - energyPrefix[static_cast<size_t>(start)];
+
+    std::fill(xa.begin(), xa.end(), std::complex<float>());
+    std::fill(xb.begin(), xb.end(), std::complex<float>());
+
+    // a = x[start, start+W), b = x[start, start+W+tauMax), so lag tau reads b[j+tau].
+    for (int i = 0; i < W; ++i)
+        xa[static_cast<size_t>(i)] = samples[start + i];
+    for (int i = 0; i < W + tauMax && start + i < numSamples; ++i)
+        xb[static_cast<size_t>(i)] = samples[start + i];
+
+    fft->perform(xa.data(), xc.data(), false);   // A
+    fft->perform(xb.data(), xr.data(), false);   // B
+    for (int i = 0; i < fftSize; ++i)
+        xc[static_cast<size_t>(i)] = std::conj(xc[static_cast<size_t>(i)])
+                                   * xr[static_cast<size_t>(i)];
+    fft->perform(xc.data(), xr.data(), true);    // r(tau) in the real part
+
     diff[0] = 0.0f;
     for (int tau = 1; tau < tauMax; ++tau)
     {
-        float sum = 0.0f;
-        const int limit = numSamples - tau;
-        for (int j = 0; j < limit; ++j)
-        {
-            float d = samples[j] - samples[j + tau];
-            sum += d * d;
-        }
-        diff[tau] = sum;
+        const float e1 = energyPrefix[static_cast<size_t>(start + tau + W)]
+                       - energyPrefix[static_cast<size_t>(start + tau)];
+        diff[static_cast<size_t>(tau)] = e0 + e1
+                                       - 2.0f * xr[static_cast<size_t>(tau)].real();
     }
 }
 
@@ -130,12 +186,13 @@ float PitchDetector::detectPitch(const float* samples, int numSamples)
     // Step 4: Parabolic interpolation for sub-sample accuracy
     float period = parabolicInterpolation(bestTau, cmndBuffer);
 
-    // Step 5: Smooth the period estimate (first-order IIR).
-    // Large jumps are smoothed like any other change rather than passed through
-    // untouched. The old "only smooth when the new value is close" gate let a
-    // single octave error land in lastPeriod at full weight and poison every
-    // following frame; rejecting real octave errors is the caller's job.
-    constexpr float smoothFactor = 0.3f;  // lower = more smoothing
+    // Step 5: Light smoothing of the period estimate.
+    //
+    // This used to be 0.3, which on a gliding pitch adds about 38 ms of lag — and
+    // lag on a glide is a constant pitch error, not a tracking failure: at
+    // 600 cents/s it is ~23 cents all by itself. The shifter already low-passes the
+    // ratio with the retune setting, so heavy smoothing here only costs accuracy.
+    constexpr float smoothFactor = 0.85f;  // lower = more smoothing
     if (lastPeriod > 0.0f)
         period = lastPeriod + smoothFactor * (period - lastPeriod);
     lastPeriod = period;

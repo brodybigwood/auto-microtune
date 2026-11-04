@@ -163,12 +163,15 @@ void NoteList::Model::paintListBoxItem(int row, juce::Graphics& g,
     // hence the reversal on every lookup.
     const int note = NoteList::kNumNotes - 1 - row;
 
-    const bool on = owner.audioProcessor.isNoteEnabled(note);
+    // Fill every note that could be snapped to, not just the literal keys: with
+    // octave extend on, one held (or clicked) note makes its whole pitch class
+    // across the keyboard eligible, and that is what the list should show. The
+    // single note actually chosen is outlined below.
+    const bool on = owner.audioProcessor.isNoteAPossibleTarget(note);
 
-    // A selected note is filled; the note being sung to is outlined.
     if (on)
     {
-        g.setColour(NeonLookAndFeel::accentCyan.withAlpha(0.28f));
+        g.setColour(NeonLookAndFeel::accentMagenta.withAlpha(0.30f));
         g.fillRect(0, 0, width, height);
     }
 

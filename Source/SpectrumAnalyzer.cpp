@@ -43,6 +43,20 @@ void SpectrumAnalyzer::feed(const float* windowedSamples, int size)
 void SpectrumAnalyzer::getMagnitudes(float* buffer, int numOutputBins)
 {
     juce::ScopedLock lock(mutex);
-    int n = std::min(numOutputBins, numBins);
-    std::copy(smoothedMags.begin(), smoothedMags.begin() + n, buffer);
+
+    // Clamp to what actually exists, not to numBins.
+    //
+    // numBins only means anything once prepare() has sized smoothedMags; before
+    // that the vector is empty and numBins is just its default. An empty vector's
+    // begin() is null, so copying numBins floats from it reads off the end of a
+    // null pointer — which is a hard crash, and it is reachable in practice: a VST3
+    // host can show the editor and run its 30 Hz timer before it ever calls
+    // prepareToPlay.
+    const int n = std::min(numOutputBins, static_cast<int>(smoothedMags.size()));
+
+    if (n > 0)
+        std::copy(smoothedMags.begin(), smoothedMags.begin() + n, buffer);
+
+    // Leave the caller's buffer fully defined rather than partly uninitialised.
+    std::fill(buffer + n, buffer + numOutputBins, 0.0f);
 }

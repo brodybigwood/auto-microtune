@@ -587,25 +587,36 @@ static void testGlideTracking()
     PitchDetector det;
     det.prepare (2048, SR);
 
-    const int block = 512;   // one detection frame
-    int    worstAt  = 0;
-    double worst    = 0.0;
+    // The production configuration: a 2048-sample window, one estimate every 512
+    // samples. Feeding a shorter window would not exercise what the plugin actually
+    // does — and the detector's integration window is half of numSamples, so a short
+    // window quietly becomes a very short analysis.
+    const int win  = 2048;
+    const int step = 512;
+
+    // A proper chirp: accumulate phase, because sin(2*pi*f(t)*t) is not a signal
+    // whose instantaneous frequency is f(t).
+    std::vector<float> sig (static_cast<size_t> (total), 0.0f);
+    double phase = 0.0;
+    for (int i = 0; i < static_cast<int> (total); ++i)
+    {
+        const double hz = startHz * std::pow (2.0, octaves * static_cast<double> (i) / total);
+        sig[static_cast<size_t> (i)] = static_cast<float> (0.8 * std::sin (phase));
+        phase += 2.0 * M_PI * hz / SR;
+    }
+
+    int    worstAt = 0;
+    double worst   = 0.0;
+    int    reports = 0;
 
     std::printf ("      true Hz   detected Hz   error (cents)\n");
-    for (int n = 0; n + block <= static_cast<int> (total); n += block)
+    for (int n = win; n + step <= static_cast<int> (total); n += step)
     {
-        // Exponential glide across the whole run.
-        const double frac = static_cast<double> (n) / total;
-        const double trueHz = startHz * std::pow (2.0, octaves * frac);
+        const double trueHz = startHz * std::pow (2.0, octaves * static_cast<double> (n) / total);
 
-        std::vector<float> buf (static_cast<size_t> (block));
-        for (int i = 0; i < block; ++i)
-            buf[static_cast<size_t> (i)] =
-                static_cast<float> (0.8 * std::sin (2.0 * M_PI * trueHz * (n + i) / SR));
+        const float got = det.detectPitch (sig.data() + (n - win), win);
 
-        const float got = det.detectPitch (buf.data(), block);
-
-        if (n % (block * 8) == 0)
+        if (++reports % 8 == 1)
         {
             const double err = cents (got, trueHz);
             std::printf ("    %8.2f   %9.2f   %+9.1f\n", trueHz, got, err);

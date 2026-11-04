@@ -10,3 +10,20 @@ JuceLibraryCode/
 .idea/
 .vscode/
 .vs/
+
+# Build output
+build/
+build-*/
+
+# Locally fetched dependencies (CMake needs JUCE_DIR; install.ps1 downloads it)
+JUCE/
+refs/
+
+# Windows installer downloads and intermediates
+vs_BuildTools.exe
+vs_installer_test.exe
+vs_sfx/
+installer.opc
+installer_meta
+*.log
+mingw-toolchain.cmake

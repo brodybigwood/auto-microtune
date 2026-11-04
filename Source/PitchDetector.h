@@ -10,6 +10,7 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include <complex>
 
 //==============================================================================
 class PitchDetector
@@ -63,6 +64,13 @@ private:
     // Scratch buffers (pre-allocated in prepare)
     std::vector<float> diffBuffer;       // difference function values
     std::vector<float> cmndBuffer;       // cumulative mean normalized difference
+    std::vector<float> energyPrefix;     // running sum of squares, for the energy term
+
+    // FFT machinery for the accelerated difference function.
+    std::unique_ptr<juce::dsp::FFT> fft;
+    int fftOrder = 11;
+    int fftSize  = 2048;
+    std::vector<std::complex<float>> xa, xb, xc, xr;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PitchDetector)
 };

@@ -33,24 +33,22 @@ void MidiManager::process(const juce::MidiBuffer& midiBuffer, double /*sampleRat
                 note.channel    = channel;
                 note.baseFreq   = noteToFrequency(noteNumber);
 
-                // Check if this is an MPE channel (channels 2-15 are per-note in lower zone)
-                if (channel >= 2 && channel <= 15)
-                {
-                    note.isMPE = true;
-                    key = (channel << 8) | noteNumber;
+                // Apply this channel's current bend on EVERY channel, not just the
+                // MPE ones. An MPE host assigns notes to member channels 1..15 and
+                // sends the bend on the note's own channel before the note-on, so
+                // treating channel 1 as plain MIDI dropped the fractional tuning of
+                // whichever note it was given.
+                //
+                // For standard MIDI this is also right: a channel-wide bend applies
+                // to every note on that channel.
+                const float bend = static_cast<float>(channelPitchBend[channel - 1] - 8192) / 8192.0f;
+                const float bendCents = bend * mpeBendRangeSemitones * 100.0f;
+                note.frequency = note.baseFreq * std::pow(2.0f, bendCents / 1200.0f);
 
-                    // Apply current pitch bend for this channel
-                    float bend = static_cast<float>(channelPitchBend[channel - 1] - 8192) / 8192.0f;
-                    float bendCents = bend * mpeBendRangeSemitones * 100.0f;
-                    note.frequency = note.baseFreq * std::pow(2.0f, bendCents / 1200.0f);
-                }
-                else
-                {
-                    // Standard MIDI: use noteNumber as key (all channels contribute)
-                    note.isMPE = false;
-                    key = noteNumber;  // simple key for standard MIDI
-                    note.frequency = note.baseFreq;
-                }
+                // Channels 2-15 are per-note in the MPE lower zone, so two notes on
+                // the same number but different channels are separate voices.
+                note.isMPE = (channel >= 2 && channel <= 15);
+                key = note.isMPE ? ((channel << 8) | noteNumber) : noteNumber;
 
                 activeNotes[key] = note;
             }
@@ -80,7 +78,8 @@ void MidiManager::process(const juce::MidiBuffer& midiBuffer, double /*sampleRat
             // Update frequency for any active MPE note on this channel
             for (auto& [key, note] : activeNotes)
             {
-                if (note.isMPE && note.channel == channel)
+                // Any note on this channel follows its bend — see the note-on path.
+                if (note.channel == channel)
                 {
                     float bend = static_cast<float>(bendValue - 8192) / 8192.0f;
                     float bendCents = bend * mpeBendRangeSemitones * 100.0f;

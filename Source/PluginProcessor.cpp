@@ -262,7 +262,20 @@ void SuperautotuneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     // === STEP 2: Update tuning set ===
     tuningManager->setOctaveExtend(currentOctaveExtend);
     tuningManager->setMidiEnabled(currentMidiEnabled);
-    tuningManager->setMidiNotes(midiManager->getActiveNoteFrequencies());
+
+    const auto heldNotes = midiManager->getActiveNoteFrequencies();
+    tuningManager->setMidiNotes(heldNotes);
+
+    // Publish the held notes for the editor as a bitmask.
+    uint64_t lo = 0, hi = 0;
+    for (const auto& [n, f] : heldNotes)
+        if (n >= 0 && n < 128)
+        {
+            if (n < 64) lo |= (uint64_t(1) << n);
+            else        hi |= (uint64_t(1) << (n - 64));
+        }
+    heldNotesLow.store(lo);
+    heldNotesHigh.store(hi);
 
     // === STEP 3: Save dry input for wet/dry mix ===
     for (int ch = 0; ch < numChannels; ++ch)
@@ -445,6 +458,65 @@ void SuperautotuneAudioProcessor::toggleNote(int midiNote)
 bool SuperautotuneAudioProcessor::isNoteEnabled(int midiNote) const
 {
     return tuningManager ? tuningManager->isNoteEnabled(midiNote) : false;
+}
+
+bool SuperautotuneAudioProcessor::isMidiNoteHeld(int midiNote) const
+{
+    if (midiNote < 0 || midiNote > 127)
+        return false;
+
+    return midiNote < 64
+         ? ((heldNotesLow.load()  >> midiNote)       & 1ull) != 0
+         : ((heldNotesHigh.load() >> (midiNote - 64)) & 1ull) != 0;
+}
+
+bool SuperautotuneAudioProcessor::isMidiArmed() const
+{
+    return apvts.getRawParameterValue(ParamIDs::midiEnabled)->load() > 0.5f;
+}
+
+int SuperautotuneAudioProcessor::getNumHeldNotes() const
+{
+    auto countBits = [] (uint64_t v)
+    {
+        int n = 0;
+        while (v != 0) { v &= (v - 1); ++n; }
+        return n;
+    };
+
+    return countBits(heldNotesLow.load()) + countBits(heldNotesHigh.load());
+}
+
+bool SuperautotuneAudioProcessor::isNoteAPossibleTarget(int midiNote) const
+{
+    if (midiNote < 0 || midiNote > 127)
+        return false;
+
+    const bool extend = apvts.getRawParameterValue(ParamIDs::octaveExtend)->load() > 0.5f;
+    const bool midi   = apvts.getRawParameterValue(ParamIDs::midiEnabled)->load() > 0.5f;
+
+    // A source note counts if it is the note itself, or — with octave extend — any
+    // whole number of octaves away.
+    auto matches = [&] (int source)
+    {
+        if (! extend)
+            return source == midiNote;
+        return (((midiNote - source) % 12) + 12) % 12 == 0;
+    };
+
+    if (midi)
+    {
+        for (int s = 0; s < 128; ++s)
+            if (isMidiNoteHeld(s) && matches(s))
+                return true;
+        return false;
+    }
+
+    for (int s = 0; s < 128; ++s)
+        if (isNoteEnabled(s) && matches(s))
+            return true;
+
+    return false;
 }
 
 //==============================================================================

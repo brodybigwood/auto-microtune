@@ -145,6 +145,15 @@ void SuperautotuneAudioProcessorEditor::paint(juce::Graphics& g)
     g.setFont(juce::FontOptions(18.0f, juce::Font::bold));
     g.drawText("SUPER AUTOTUNE", titleBar.toNearestInt(), juce::Justification::centred);
 
+    // Diagnostic readout. Two links have to hold for MIDI to do anything: the host
+    // must deliver events to processBlock, and the MIDI toggle must be armed. This
+    // says which one is missing instead of leaving it to guesswork.
+    g.setFont(juce::FontOptions(12.0f));
+    g.setColour(NeonLookAndFeel::textDim);
+    g.drawText("MIDI " + juce::String(audioProcessor.isMidiArmed() ? "armed" : "off")
+               + "   held " + juce::String(audioProcessor.getNumHeldNotes()),
+               titleBar.toNearestInt().reduced(10, 0), juce::Justification::centredRight);
+
     // Bottom line on title bar
     g.setColour(NeonLookAndFeel::accentCyan.withAlpha(0.3f));
     g.drawHorizontalLine(32, 0.0f, float(getWidth()));
@@ -224,4 +233,7 @@ void SuperautotuneAudioProcessorEditor::timerCallback()
     // Highlight the note currently being snapped to in the list.
     if (noteList)
         noteList->setActiveNote(audioProcessor.getTargetNote());
+
+    // Keeps the diagnostic readout in the title bar current.
+    repaint();
 }

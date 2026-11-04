@@ -211,6 +211,8 @@ TuningTarget TuningManager::findTarget (float inputHz) const
 {
     TuningTarget out;
 
+    // Without an input pitch there is no octave to place a note in, so there is no
+    // single target. The editor shows every held MIDI note instead of one.
     if (inputHz < 1.0f)
         return out;
 
