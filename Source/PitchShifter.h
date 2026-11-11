@@ -133,6 +133,13 @@ private:
 
     void runDetector (int channel);
 
+    // Snap a jump target onto the position that best correlates with the current
+    // read position, searching a few samples either side. The jump quantum comes
+    // from the detected period, and a few samples of error there makes the
+    // crossfade blend two copies at different phases — a click at the jump rate.
+    // Measuring the alignment, instead of trusting the estimate, removes that.
+    double refineJump (int channel, double from, double to) const;
+
     //==============================================================================
     double sampleRate = 44100.0;
     int    numChans   = 2;
@@ -152,6 +159,7 @@ private:
     {
         std::vector<float> ring;
         long long written = 0;      // absolute samples pushed
+        long long lastDetect = 0;   // write position of the last estimate
         float     period  = 0.0f;   // measured period in samples (0 = no estimate)
         float     f0      = 0.0f;
 

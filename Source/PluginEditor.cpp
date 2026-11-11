@@ -151,7 +151,8 @@ void SuperautotuneAudioProcessorEditor::paint(juce::Graphics& g)
     g.setFont(juce::FontOptions(12.0f));
     g.setColour(NeonLookAndFeel::textDim);
     g.drawText("MIDI " + juce::String(audioProcessor.isMidiArmed() ? "armed" : "off")
-               + "   held " + juce::String(audioProcessor.getNumHeldNotes()),
+               + "   held " + juce::String(audioProcessor.getNumHeldNotes())
+               + "   lat " + juce::String(audioProcessor.getLatencySamples()),
                titleBar.toNearestInt().reduced(10, 0), juce::Justification::centredRight);
 
     // Bottom line on title bar

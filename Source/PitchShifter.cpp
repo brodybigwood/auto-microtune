@@ -141,6 +141,54 @@ float PitchShifter::readCubic (int channel, double pos) const
 }
 
 //==============================================================================
+double PitchShifter::refineJump (int channel, double from, double to) const
+{
+    // Compare a short window at the current read position against candidate
+    // positions around the nominal jump target and take the best match.
+    //
+    // The quantum is `period * ceil(fragment / period)` from the detected period.
+    // On a clean synthetic tone that estimate is exact and the jump is phase
+    // aligned; on real audio it is a few samples out, and the crossfade then blends
+    // two copies of the waveform at different phases — heard as a click every time
+    // the correction jumps.
+    const int len    = std::min (fragment, 64);
+    const int radius = 8;
+
+    float aBuf[64];
+    for (int k = 0; k < len; ++k)
+        aBuf[k] = readCubic (channel, from + k);
+
+    double best      = to;
+    double bestScore = -2.0;   // cosine similarity lies in [-1, 1]
+
+    for (int d = -radius; d <= radius; ++d)
+    {
+        const double cand = to + d;
+
+        double num = 0.0, den = 0.0;
+        for (int k = 0; k < len; ++k)
+        {
+            const double b = readCubic (channel, cand + k);
+            num += aBuf[k] * b;
+            den += b * b;
+        }
+
+        if (den < 1.0e-12)
+            continue;
+
+        const double score = num / std::sqrt (den);
+
+        if (score > bestScore)
+        {
+            bestScore = score;
+            best      = cand;
+        }
+    }
+
+    return best;
+}
+
+//==============================================================================
 void PitchShifter::pushChannel (int channel, const float* input, int numSamples)
 {
     if (channel < 0 || channel >= static_cast<int> (channels.size()))
@@ -152,6 +200,20 @@ void PitchShifter::pushChannel (int channel, const float* input, int numSamples)
         c.ring[static_cast<size_t> (c.written + i) & static_cast<size_t> (ringMask)] = input[i];
 
     c.written += numSamples;
+
+    // Update the pitch estimate here, not inside render().
+    //
+    // The caller reads getDetectedPitch() after this and uses it to choose the
+    // target note; render() then divides that target by the detected pitch. If the
+    // estimate were refreshed in between, the target would belong to the previous
+    // estimate and the divisor to the next one, so while the pitch is moving the
+    // correction points somewhere between the two — heard as retuning the wrong way
+    // until the pitch settles. Detecting here makes both use the same value.
+    if (c.written - c.lastDetect >= static_cast<long long> (fragment) * estEvery)
+    {
+        runDetector (channel);
+        c.lastDetect = c.written;
+    }
 }
 
 //==============================================================================
@@ -198,7 +260,12 @@ void PitchShifter::onFragmentBoundary (State& state, int channel, float targetFr
     if (++state.fragsSinceEst >= estEvery)
     {
         state.fragsSinceEst = 0;
-        runDetector (channel);
+
+        // The estimate is refreshed in pushChannel(), deliberately NOT here: the
+        // caller chose `targetFreq` from getDetectedPitch(), and the ratio below
+        // divides that target by c.f0. Refreshing c.f0 in between paired a target
+        // from one estimate with a divisor from the next, which is why the
+        // correction pointed the wrong way while the pitch was moving.
 
         // Only the DETECTED pitch has to be inside kMinF0..kMaxF0 — that is what
         // the detector can measure. The target is allowed to be lower: shifting a
@@ -268,14 +335,14 @@ void PitchShifter::onFragmentBoundary (State& state, int channel, float targetFr
     {
         // Reading too fast (or about to overtake the write head): jump back.
         state.xfade = true;
-        state.r2 = state.r1 - jump;
+        state.r2 = refineJump (channel, state.r1, state.r1 - jump);
         signedJump = -jump;
     }
     else if (d1 < -jump * 0.5)
     {
         // Reading too slowly: jump forward.
         state.xfade = true;
-        state.r2 = state.r1 + jump;
+        state.r2 = refineJump (channel, state.r1, state.r1 + jump);
         signedJump = jump;
     }
 
